@@ -1,0 +1,102 @@
+# File: .github/workflows/coderabbit-pro.yml
+
+name: CodeRabbit Pro – Policy Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gate:
+    name: Enforce Code Review Policy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Đã loại bỏ bước kiểm tra styleguide.md
+
+      # Tạm dừng một chút để Coderabbit App có thời gian đăng bình luận
+      - name: Small delay (let bot comment)
+        run: sleep 15 # Tăng thời gian chờ lên 15 giây để chắc chắn hơn
+
+      # Lấy và đếm các bình luận có tag [critical], [high], [medium]
+      - name: Evaluate CodeRabbit findings
+        id: evaluate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr = context.payload.pull_request?.number;
+            if (!pr) {
+              core.setFailed('No pull_request in context.');
+              return;
+            }
+
+            const [reviewComments, issueComments] = await Promise.all([
+              github.paginate(github.rest.pulls.listReviewComments, { owner, repo, pull_number: pr, per_page: 100 }),
+              github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr, per_page: 100 }),
+            ]);
+
+            const TAG = /^\s*\[(critical|high|medium)\]/i;
+            const isFromBotOrTagged = c =>
+              (c.user?.type === 'Bot' || c.user?.login?.endsWith('[bot]')) ||
+              TAG.test(c.body || '');
+
+            const comments = [...reviewComments, ...issueComments].filter(isFromBotOrTagged);
+
+            let critical = 0, high = 0, medium = 0;
+            for (const c of comments) {
+              const m = (c.body || '').match(TAG);
+              if (!m) continue;
+              const lvl = m[1].toLowerCase();
+              if (lvl === 'critical') critical++;
+              else if (lvl === 'high') high++;
+              else if (lvl === 'medium') medium++;
+            }
+
+            core.info(`Found: critical=${critical}, high=${high}, medium=${medium}`);
+            core.setOutput('critical', String(critical));
+            core.setOutput('high', String(high));
+            core.setOutput('medium', String(medium));
+
+            // Quy tắc Fail:
+            // - Fail nếu (medium > 3) HOẶC (critical + high > 0)
+            if (medium > 3 || (critical + high) > 0) {
+              core.setFailed(`Policy failed: medium=${medium} (threshold is >3) or critical+high=${critical+high} (threshold is >0)`);
+            }
+
+      # (Tùy chọn) Đăng một bình luận tóm tắt về kết quả kiểm tra
+      - name: Comment summary
+        if: always() # Luôn chạy bước này, kể cả khi bước trước bị fail
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Script này sẽ lấy kết quả từ bước 'evaluate' và đăng một comment tóm tắt
+            const { owner, repo } = context.repo;
+            const pr_number = context.issue.number;
+            const critical = '${{ steps.evaluate.outputs.critical }}';
+            const high = '${{ steps.evaluate.outputs.high }}';
+            const medium = '${{ steps.evaluate.outputs.medium }}';
+            const conclusion = '${{ job.status }}'; // Lấy trạng thái của job (success hoặc failure)
+
+            const body = `### 🛡️ Code Review Policy Gate\n\n` +
+                         `**Result:** ${conclusion === 'success' ? '✅ Passed' : '❌ Failed'}\n\n` +
+                         `| Severity | Count | Threshold |\n` +
+                         `|---|---|---|\n` +
+                         `| Critical | **${critical}** | Must be 0 |\n` +
+                         `| High | **${high}** | Must be 0 |\n` +
+                         `| Medium | **${medium}** | Must be < 4 |\n\n` +
+                         `*This check is performed by the custom Policy Gate workflow.*`;
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: pr_number, body
+            });
