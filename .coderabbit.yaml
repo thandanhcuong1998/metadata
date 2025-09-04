@@ -1,4 +1,4 @@
-# .coderabbit.yaml (Phiên bản có Few-Shot Prompting)
+# .coderabbit.yaml
 reviews:
   enabled: true
   
