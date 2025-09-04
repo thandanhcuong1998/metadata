@@ -67,7 +67,7 @@
 * [cite_start]**SG-200 (SHOULD):** Use SvelteKit’s standard routing, endpoints, and form actions. 
 * [cite_start]**SG-202 (SHOULD):** Separate server code into `+page.server.ts` and client code into `+page.svelte`.
 
-## 11) Metadata Files
+## 20) Metadata Files
 
 * **SG-300 (MUST):** The root of a `.json` file MUST contain a `version` key.
 * **SG-301 (MUST):** The value of the `version` key MUST follow Semantic Versioning format (e.g., "1.0.0", "2.1.5", "1.0.0-beta.1"). Non-compliant values like "latest" or "v1" are forbidden.
