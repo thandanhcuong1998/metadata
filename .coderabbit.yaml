@@ -1,22 +1,33 @@
-# .coderabbit.yaml (Phiên bản chính xác sử dụng labeling_instructions)
+# .coderabbit.yaml (Fixed version for Svelte 5 + TypeScript project)
 
 reviews:
-  # (1) CHỈ THỊ CHUNG: Vẫn giữ lại để AI biết vai trò và tài liệu tham khảo
+  # General instructions for code review
   instructions: |
     You are an expert code reviewer for a Svelte 5 + TypeScript project.
     Your primary task is to ensure the submitted code STRICTLY complies with the CODE RULES provided in the styleguide.md file.
     When you find a violation, you MUST cite the specific rule ID (e.g., "Violation of SG-010...").
-    ---
-    CODE RULES (Your primary reference):
-    {{ file("styleguide.md") }}
-    ---
-
-  # (2) CHỈ THỊ GẮN NHÃN (TAG): Đây là phần quan trọng nhất để sửa lỗi
-  labeling_instructions: |
-    For each comment you have generated, you MUST select EXACTLY ONE severity label and prefix your comment with it. The label MUST be one of: [critical], [high], [medium], [low].
-
+    
+    For each comment you generate, you MUST select EXACTLY ONE severity label and prefix your comment with it. The label MUST be one of: [critical], [high], [medium], [low].
+    
     Use the following logic to determine the label:
     - [critical]: Assign this label ONLY for violations of security rules (SG-100, SG-101, SG-102, SG-302). Hardcoded secrets are ALWAYS critical.
     - [high]: Assign this label for violations of core architecture, data integrity, or performance rules (e.g., SG-003, SG-070, SG-091, SG-301).
     - [medium]: Assign this label for violations of conventions or accessibility (e.g., SG-010, SG-050).
     - [low]: Assign this label for minor stylistic suggestions or deviations from SHOULD rules.
+    
+    Example format: "[high] Violation of SG-003: Component props must be properly typed"
+    ---
+    CODE RULES (Your primary reference):
+    {{ file("styleguide.md") }}
+    ---
+
+  # Labeling instructions for suggested PR labels (not comment severity)
+  labeling_instructions:
+    - label: "critical"
+      instructions: "Apply when the PR contains critical security violations or fixes"
+    - label: "high"
+      instructions: "Apply when the PR contains important architecture or performance changes"
+    - label: "medium" 
+      instructions: "Apply when the PR contains convention or accessibility improvements"
+    - label: "low"
+      instructions: "Apply when the PR contains minor stylistic changes"
