@@ -71,3 +71,4 @@
 
 * **SG-300 (MUST):** The root of a `.json` file MUST contain a `version` key.
 * **SG-301 (MUST):** The value of the `version` key MUST follow Semantic Versioning format (e.g., "1.0.0", "2.1.5", "1.0.0-beta.1"). Non-compliant values like "latest" or "v1" are forbidden.
+* **SG-302 (MUST):** Files MUST NOT contain hardcoded secrets, API keys, or passwords. Use environment variables or a secrets management service instead.
