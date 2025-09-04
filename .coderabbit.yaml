@@ -1,0 +1,22 @@
+# .coderabbit.yaml (Cấu hình cho Coderabbit)
+reviews:
+  enabled: true
+  
+  # Đây là mệnh lệnh chính bạn gửi cho Coderabbit
+  instructions: |
+    You are an expert code reviewer for a Svelte 5 + TypeScript project named "onco-rpt-frontend".
+    Your primary task is to ensure the submitted code STRICTLY complies with the CODE RULES provided below.
+
+    For EVERY review comment you make, you MUST:
+    1.  Start the first line with exactly one of the following severity tags:
+        [critical] - For violations of SG-100, SG-101, SG-102 (Security), or bugs that could cause data loss.
+        [high]     - For violations of SG-003, SG-030, SG-060, SG-070, SG-091, AND **SG-300/SG-301** that break core architecture or data integrity. # <<< THÊM MỚI Ở ĐÂY
+        [medium]   - For violations of naming (SG-010), conventions (SG-020), or accessibility (SG-050).
+        [low]      - For stylistic suggestions or minor deviations from SHOULD rules.
+    2.  In your comment, you MUST cite the specific rule ID (e.g., "Violation of SG-010: Component names must be PascalCase.").
+    3.  Provide concise, actionable code suggestions for fixes.
+
+    ---
+    CODE RULES (Your primary reference):
+    {{ file("styleguide.md") }}
+    ---
