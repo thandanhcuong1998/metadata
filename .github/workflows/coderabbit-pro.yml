@@ -26,30 +26,26 @@ jobs:
         with:
           fetch-depth: 1
 
-      # <<< BƯỚC MỚI: Thêm một khoảng chờ ngắn để Coderabbit App khởi tạo >>>
       - name: Initial delay for Coderabbit to start
         if: github.event_name == 'pull_request'
         run: sleep 30
       
-      # <<< SỬA ĐỔI: Chờ Coderabbit hoàn thành review >>>
       - name: Wait for Coderabbit review to complete
         if: github.event_name == 'pull_request'
         uses: lewagon/wait-on-check-action@v1.3.3
         with:
           # QUAN TRỌNG: Tên của status check mà Coderabbit App tạo ra.
-          # Hãy kiểm tra tên chính xác trên PR của bạn.
-          check-name: 'Coderabbit' 
+          # Hãy kiểm tra tên chính xác trên PR của bạn (ví dụ: 'Coderabbit', 'CodeRabbit').
+          check-name: 'CodeRabbit' 
           
           ref: ${{ github.event.pull_request.head.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 20
-          # Đã xóa 'running-timeout' không hợp lệ
 
       - name: Evaluate CodeRabbit findings
         id: evaluate
         uses: actions/github-script@v7
         with:
-          # ... (phần script giữ nguyên, không thay đổi)
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -80,8 +76,37 @@ jobs:
 
       - name: Update Summary Comment
         if: always()
-        # ... (phần này giữ nguyên, không thay đổi)
-        
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr_number = context.issue.number;
+            const potential_issues = '${{ steps.evaluate.outputs.potential_issues }}';
+            const conclusion = '${{ job.status }}';
+            const signature = '';
+            const body = `### 🛡️ Code Review Policy Gate\n\n` + `${signature}\n\n` + `**Result:** ${conclusion === 'success' ? '✅ Passed' : '❌ Failed'}\n\n` + `| Criterion | Count | Threshold |\n` + `|---|---|---|\n` + `| ⚠️ Potential Issues | **${potential_issues}** | Must be ≤ 3 |\n\n` + `*This check re-runs automatically when new comments are added.*`;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr_number });
+            const botComment = comments.find(comment => comment.user.type === 'Bot' && comment.body.includes(signature));
+            if (botComment) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: botComment.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr_number, body });
+            }
+
       - name: Add "READY TO MERGE" label
         if: success() && steps.evaluate.outputs.potential_issues == '0'
-        # ... (phần này giữ nguyên, không thay đổi)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr_number = context.issue.number;
+            const label_to_add = "READY TO MERGE";
+
+            core.info(`Adding label '${label_to_add}' to PR #${pr_number}`);
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: pr_number,
+              labels: [label_to_add]
+            });
