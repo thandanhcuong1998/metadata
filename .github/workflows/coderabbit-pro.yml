@@ -2,8 +2,9 @@
 
 name: CodeRabbit Pro – Policy Gate
 
+# <<< SỬA ĐỔI 1: Thay đổi trigger để có bối cảnh đầy đủ hơn >>>
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
   
   issue_comment:
@@ -13,7 +14,9 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: write 
+  issues: write
+  # Thêm quyền 'statuses: read' để đảm bảo có thể đọc tất cả status checks
+  statuses: read
 
 jobs:
   gate:
@@ -21,27 +24,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout (shallow)
+      # <<< SỬA ĐỔI 2: Chỉ định checkout đúng code của PR khi dùng pull_request_target >>>
+      - name: Checkout PR Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Initial delay for Coderabbit to start
-        if: github.event_name == 'pull_request'
-        run: sleep 30
-      
       - name: Wait for Coderabbit review to complete
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         uses: lewagon/wait-on-check-action@v1.3.3
         with:
-          # QUAN TRỌNG: Tên của status check mà Coderabbit App tạo ra.
-          # Hãy kiểm tra tên chính xác trên PR của bạn (ví dụ: 'Coderabbit', 'CodeRabbit').
-          check-name: 'CodeRabbit' 
-          
+          # QUAN TRỌNG: Dựa trên ảnh của bạn, tên check là 'CodeRabbit'
+          check-name: 'CodeRabbit'
           ref: ${{ github.event.pull_request.head.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 20
-
+          
       - name: Evaluate CodeRabbit findings
         id: evaluate
         uses: actions/github-script@v7
@@ -102,7 +100,6 @@ jobs:
             const repo = context.repo.repo;
             const pr_number = context.issue.number;
             const label_to_add = "READY TO MERGE";
-
             core.info(`Adding label '${label_to_add}' to PR #${pr_number}`);
             await github.rest.issues.addLabels({
               owner,
