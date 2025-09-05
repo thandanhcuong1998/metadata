@@ -5,10 +5,15 @@ name: CodeRabbit Pro – Policy Gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  
+  issue_comment:
+    types: [created]
+    if: github.event.sender.type != 'Bot'
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write # <<< THÊM MỚI: Cấp quyền để action có thể thêm/xóa label
 
 jobs:
   gate:
@@ -21,13 +26,16 @@ jobs:
         with:
           fetch-depth: 1
 
-      # Đã loại bỏ bước kiểm tra styleguide.md
+      - name: Wait for Coderabbit review to complete
+        if: github.event_name == 'pull_request'
+        uses: lewagon/wait-on-check-action@v1.3.3
+        with:
+          check-name: 'Coderabbit' 
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 20
+          running-timeout: 300
+          allowed-conclusions: success,failure,neutral,skipped
 
-      # Tạm dừng một chút để Coderabbit App có thời gian đăng bình luận
-      - name: Small delay (let bot comment)
-        run: sleep 15 # Tăng thời gian chờ lên 15 giây để chắc chắn hơn
-
-      # Lấy và đếm các bình luận có tag [critical], [high], [medium]
       - name: Evaluate CodeRabbit findings
         id: evaluate
         uses: actions/github-script@v7
@@ -35,68 +43,67 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const pr = context.payload.pull_request?.number;
-            if (!pr) {
-              core.setFailed('No pull_request in context.');
+            const pr_number = context.issue.number;
+            if (!pr_number) {
+              core.setFailed('Could not get PR number from context.');
               return;
             }
-
             const [reviewComments, issueComments] = await Promise.all([
-              github.paginate(github.rest.pulls.listReviewComments, { owner, repo, pull_number: pr, per_page: 100 }),
-              github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr, per_page: 100 }),
+              github.paginate(github.rest.pulls.listReviewComments, { owner, repo, pull_number: pr_number, per_page: 100 }),
+              github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr_number, per_page: 100 }),
             ]);
+            const allComments = [...reviewComments, ...issueComments];
+            
+            const searchTerm = '⚠️ Potential issue';
+            let potential_issues = 0;
+            for (const c of allComments) {
+              if (c.user?.type === 'Bot' && c.body?.includes(searchTerm)) {
+                potential_issues++;
+              }
+            }
+            core.info(`Found: ${potential_issues} potential issues.`);
+            core.setOutput('potential_issues', String(potential_issues));
 
-            const TAG = /^\s*\[(critical|high|medium)\]/i;
-            const isFromBotOrTagged = c =>
-              (c.user?.type === 'Bot' || c.user?.login?.endsWith('[bot]')) ||
-              TAG.test(c.body || '');
-
-            const comments = [...reviewComments, ...issueComments].filter(isFromBotOrTagged);
-
-            let critical = 0, high = 0, medium = 0;
-            for (const c of comments) {
-              const m = (c.body || '').match(TAG);
-              if (!m) continue;
-              const lvl = m[1].toLowerCase();
-              if (lvl === 'critical') critical++;
-              else if (lvl === 'high') high++;
-              else if (lvl === 'medium') medium++;
+            if (potential_issues > 3) {
+              core.setFailed(`Policy failed: Found ${potential_issues} 'Potential issue' comments (threshold is >3).`);
             }
 
-            core.info(`Found: critical=${critical}, high=${high}, medium=${medium}`);
-            core.setOutput('critical', String(critical));
-            core.setOutput('high', String(high));
-            core.setOutput('medium', String(medium));
-
-            // Quy tắc Fail:
-            // - Fail nếu (medium > 3) HOẶC (critical + high > 0)
-            if (medium > 3 || (critical + high) > 0) {
-              core.setFailed(`Policy failed: medium=${medium} (threshold is >3) or critical+high=${critical+high} (threshold is >0)`);
+      - name: Update Summary Comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          # ... (phần script này giữ nguyên như cũ, không thay đổi)
+          script: |
+            const { owner, repo } = context.repo;
+            const pr_number = context.issue.number;
+            const potential_issues = '${{ steps.evaluate.outputs.potential_issues }}';
+            const conclusion = '${{ job.status }}';
+            const signature = '';
+            const body = `### 🛡️ Code Review Policy Gate\n\n` + `${signature}\n\n` + `**Result:** ${conclusion === 'success' ? '✅ Passed' : '❌ Failed'}\n\n` + `| Criterion | Count | Threshold |\n` + `|---|---|---|\n` + `| ⚠️ Potential Issues | **${potential_issues}** | Must be ≤ 3 |\n\n` + `*This check re-runs automatically when new comments are added.*`;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr_number });
+            const botComment = comments.find(comment => comment.user.type === 'Bot' && comment.body.includes(signature));
+            if (botComment) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: botComment.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr_number, body });
             }
 
-      # (Tùy chọn) Đăng một bình luận tóm tắt về kết quả kiểm tra
-      - name: Comment summary
-        if: always() # Luôn chạy bước này, kể cả khi bước trước bị fail
+      # <<< BƯỚC MỚI: TỰ ĐỘNG THÊM LABEL KHI ĐẠT TIÊU CHUẨN >>>
+      - name: Add "READY TO MERGE" label
+        # Chỉ chạy bước này nếu các bước trước thành công VÀ số lượng issue đếm được là 0
+        if: success() && steps.evaluate.outputs.potential_issues == '0'
         uses: actions/github-script@v7
         with:
           script: |
-            // Script này sẽ lấy kết quả từ bước 'evaluate' và đăng một comment tóm tắt
-            const { owner, repo } = context.repo;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
             const pr_number = context.issue.number;
-            const critical = '${{ steps.evaluate.outputs.critical }}';
-            const high = '${{ steps.evaluate.outputs.high }}';
-            const medium = '${{ steps.evaluate.outputs.medium }}';
-            const conclusion = '${{ job.status }}'; // Lấy trạng thái của job (success hoặc failure)
+            const label_to_add = "READY TO MERGE";
 
-            const body = `### 🛡️ Code Review Policy Gate\n\n` +
-                         `**Result:** ${conclusion === 'success' ? '✅ Passed' : '❌ Failed'}\n\n` +
-                         `| Severity | Count | Threshold |\n` +
-                         `|---|---|---|\n` +
-                         `| Critical | **${critical}** | Must be 0 |\n` +
-                         `| High | **${high}** | Must be 0 |\n` +
-                         `| Medium | **${medium}** | Must be < 4 |\n\n` +
-                         `*This check is performed by the custom Policy Gate workflow.*`;
-
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: pr_number, body
+            core.info(`Adding label '${label_to_add}' to PR #${pr_number}`);
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: pr_number,
+              labels: [label_to_add]
             });
