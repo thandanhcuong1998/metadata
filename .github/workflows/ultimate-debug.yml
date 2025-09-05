@@ -1,0 +1,18 @@
+# File: .github/workflows/ultimate-debug.yml
+# MỤC ĐÍCH: Bắt và in ra TẤT CẢ các sự kiện liên quan để tìm ra sự kiện chính xác của Coderabbit
+
+name: Ultimate Event Debugger
+
+on: [push, pull_request, check_run, check_suite, status] # Lắng nghe TẤT CẢ các sự kiện có thể xảy ra
+
+jobs:
+  debug:
+    name: Dump Event Context
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print Event Details
+        run: |
+          echo "Workflow triggered by event: ${{ github.event_name }}"
+          echo "----------------------------------------------------"
+          # In ra toàn bộ nội dung của sự kiện dưới dạng JSON
+          echo "${{ toJSON(github.event) }}"
