@@ -2,56 +2,48 @@
 
 name: CodeRabbit Pro – Policy Gate
 
-# <<< SỬA ĐỔI 1: Thay đổi trigger để có bối cảnh đầy đủ hơn >>>
+# <<< SỬA ĐỔI 1: Thay đổi hoàn toàn trigger của workflow >>>
+# Workflow này sẽ chỉ chạy KHI một status check khác hoàn thành.
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
-  
-  issue_comment:
-    types: [created]
-    if: github.event.sender.type != 'Bot'
+  check_run:
+    types: [completed]
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
-  # Thêm quyền 'statuses: read' để đảm bảo có thể đọc tất cả status checks
-  statuses: read
+  pull-requests: read # Chỉ cần quyền đọc PR
+  issues: write # Cần quyền ghi issue để comment và thêm label
+  checks: read # Cần quyền đọc check_run
 
 jobs:
   gate:
+    # Thêm điều kiện để job này chỉ chạy nếu status check hoàn thành là của "CodeRabbit"
+    if: github.event.check_run.name == 'CodeRabbit'
     name: Enforce Code Review Policy
     runs-on: ubuntu-latest
 
     steps:
-      # <<< SỬA ĐỔI 2: Chỉ định checkout đúng code của PR khi dùng pull_request_target >>>
+      # <<< SỬA ĐỔI 2: Checkout code của commit đã được Coderabbit check >>>
       - name: Checkout PR Code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.check_run.head_sha }}
 
-      - name: Wait for Coderabbit review to complete
-        if: github.event_name == 'pull_request_target'
-        uses: lewagon/wait-on-check-action@v1.3.3
-        with:
-          # QUAN TRỌNG: Dựa trên ảnh của bạn, tên check là 'CodeRabbit'
-          check-name: 'CodeRabbit'
-          ref: ${{ github.event.pull_request.head.sha }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 20
-          
+      # <<< ĐÃ XÓA BỎ HOÀN TOÀN CÁC BƯỚC "sleep" và "wait-on-check-action" >>>
+
       - name: Evaluate CodeRabbit findings
         id: evaluate
         uses: actions/github-script@v7
         with:
           script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const pr_number = context.issue.number;
-            if (!pr_number) {
-              core.setFailed('Could not get PR number from context.');
+            // <<< SỬA ĐỔI 3: Lấy PR number từ context của check_run >>>
+            if (context.payload.check_run.pull_requests.length === 0) {
+              core.info('This check is not associated with a pull request. Skipping.');
               return;
             }
+            const pr_number = context.payload.check_run.pull_requests[0].number;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
             const [reviewComments, issueComments] = await Promise.all([
               github.paginate(github.rest.pulls.listReviewComments, { owner, repo, pull_number: pr_number, per_page: 100 }),
               github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr_number, per_page: 100 }),
@@ -77,12 +69,13 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            if (context.payload.check_run.pull_requests.length === 0) { return; }
+            const pr_number = context.payload.check_run.pull_requests[0].number;
             const { owner, repo } = context.repo;
-            const pr_number = context.issue.number;
             const potential_issues = '${{ steps.evaluate.outputs.potential_issues }}';
             const conclusion = '${{ job.status }}';
             const signature = '';
-            const body = `### 🛡️ Code Review Policy Gate\n\n` + `${signature}\n\n` + `**Result:** ${conclusion === 'success' ? '✅ Passed' : '❌ Failed'}\n\n` + `| Criterion | Count | Threshold |\n` + `|---|---|---|\n` + `| ⚠️ Potential Issues | **${potential_issues}** | Must be ≤ 3 |\n\n` + `*This check re-runs automatically when new comments are added.*`;
+            const body = `### 🛡️ Code Review Policy Gate\n\n` + `${signature}\n\n` + `**Result:** ${conclusion === 'success' ? '✅ Passed' : '❌ Failed'}\n\n` + `| Criterion | Count | Threshold |\n` + `|---|---|---|\n` + `| ⚠️ Potential Issues | **${potential_issues}** | Must be ≤ 3 |\n\n` + `*This check runs automatically after the main CodeRabbit review.*`;
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr_number });
             const botComment = comments.find(comment => comment.user.type === 'Bot' && comment.body.includes(signature));
             if (botComment) {
@@ -96,14 +89,11 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            if (context.payload.check_run.pull_requests.length === 0) { return; }
+            const pr_number = context.payload.check_run.pull_requests[0].number;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const pr_number = context.issue.number;
             const label_to_add = "READY TO MERGE";
-            core.info(`Adding label '${label_to_add}' to PR #${pr_number}`);
             await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number: pr_number,
-              labels: [label_to_add]
+              owner, repo, issue_number: pr_number, labels: [label_to_add]
             });
