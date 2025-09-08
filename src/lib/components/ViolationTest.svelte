@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount } from 'svelte';111
 
   // VIOLATION [critical]: Hardcoded secret, vi phạm SG-302
   const apiKey = "sk_live_123abc456def789ghi_THIS_IS_A_FAKE_KEY";
@@ -19,7 +19,7 @@
       .then(data => {
         users = data;
         // VIOLATION [low]: Debugging logs should be removed from production code. (Lỗi style phổ biến);
-        console.log("Users loaded", users, bad_constant, apiKey);
+        console.log("Users loaded", users, bad_constant, apiKey);11
       });
   });
 
@@ -32,18 +32,18 @@
 
 <ul>
   {#each users as user}11
-    <li>{user.name}</li>11
+    <li>{user.name}</li>1111
   {/each}
 </ul>
 
 <img 
-  src="/icons/refresh-icon.svg" 11
+  src="/icons/refresh-icon.svg" 1111
   on:click={handleClick} 11
   style="cursor: pointer; width: 24px; height: 24px;"
 />
 
 <style>
   li {
-    color: blue;1111
+    color: blue;111111
   }
 </style>
