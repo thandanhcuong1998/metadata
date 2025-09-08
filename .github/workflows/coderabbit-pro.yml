@@ -1,13 +1,11 @@
 name: Check CodeRabbit Review and Label PR
 
-# SỬ DỤNG TRIGGER MỚI VÀ CHÍNH XÁC HƠN
 on:
   pull_request_review:
-    types: [submitted] # Chạy khi một review được submit (ví dụ: sau khi bot comment xong)
+    types: [submitted]
 
 jobs:
   evaluate_codereview:
-    # Điều kiện mới: Chỉ chạy khi review được submit bởi bot CodeRabbit
     if: github.event.review.user.login == 'coderabbitai[bot]'
     runs-on: ubuntu-latest
     permissions:
@@ -15,16 +13,18 @@ jobs:
       contents: read
 
     steps:
+      # --- THÊM BƯỚC QUAN TRỌNG NÀY VÀO ---
+      # Tải mã nguồn về môi trường chạy để các lệnh `gh` và `git` có thể hoạt động
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Get PR Information
         id: get_pr_info
         run: |
-          # Trong sự kiện pull_request_review, thông tin PR có sẵn trực tiếp
           echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
           echo "pr_head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
 
       - name: Wait for API to be consistent
-        # Mặc dù review đã submit, vẫn nên có một khoảng chờ ngắn
-        # để đảm bảo tất cả comment đều có thể truy vấn được qua API
         run: sleep 10s
 
       - name: Check for "Potential issue" labels in review comments
@@ -34,16 +34,12 @@ jobs:
           PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
           REPO_FULL_NAME: ${{ github.repository }}
         run: |
-          # API call vẫn giữ nguyên, lấy tất cả comment review trên code
           comments=$(gh api \
             "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/comments" \
             --jq '.[] | select(.user.login == "coderabbitai[bot]") | .body')
 
-          # Đếm số lượng comment chứa chuỗi "Potential issue"
-          # LƯU Ý: Hãy chắc chắn lại rằng đây là chuỗi văn bản chính xác
           issue_count=0
           while IFS= read -r comment; do
-            # Sử dụng 'grep -i' để không phân biệt chữ hoa/thường
             if echo "$comment" | grep -i -q "Potential issue"; then
               issue_count=$((issue_count + 1))
             fi
@@ -52,12 +48,14 @@ jobs:
           echo "Found $issue_count 'Potential issue' comments."
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
+      # Bước này sẽ làm workflow thất bại nếu issue > 3
       - name: Set PR status to failure if issue count exceeds threshold
         if: steps.check_comments.outputs.issue_count > 3
         run: |
           echo "Number of 'Potential issue' comments is greater than 3. Failing the check."
           exit 1
 
+      # Bước này chỉ chạy nếu issue < 3
       - name: Add "READY TO MERGE" label if criteria are met
         if: steps.check_comments.outputs.issue_count < 3
         env:
@@ -66,6 +64,7 @@ jobs:
           echo "All checks passed. Adding 'READY TO MERGE' label."
           gh pr edit ${{ steps.get_pr_info.outputs.pr_number }} --add-label "READY TO MERGE"
 
+      # Bước này sẽ chạy nếu issue >= 3 để gỡ label đi (nếu trước đó nó đã được thêm)
       - name: Remove "READY TO MERGE" label if criteria are not met anymore
         if: steps.check_comments.outputs.issue_count >= 3
         env:
