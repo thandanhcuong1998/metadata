@@ -8,9 +8,10 @@ on:
 
 jobs:
   evaluate_codereview:
+    # SỬA LỖI #1: Dùng đúng username 'coderabbitai'
     if: |
-      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
-      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai[bot]')
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -20,10 +21,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # BƯỚC NÀY ĐÃ BỊ LOẠI BỎ VÌ KHÔNG CẦN THIẾT VÀ GÂY LỖI
-      # - name: Get PR Information ...
-
-      # SỬA LỖI LẦN CUỐI: Cập nhật jq filter để khớp với emoji và văn bản chính xác
       - name: Generate Summary from Unresolved Comments (GraphQL)
         id: generate_summary
         env:
@@ -52,15 +49,15 @@ jobs:
               }
             }'
 
-          # SỬA LỖI: Tìm kiếm chính xác chuỗi "⚠️ Potential issue"
+          # SỬA LỖI #1 VÀ #2: Dùng đúng username 'coderabbitai' VÀ đúng chuỗi issue "_⚠️ Potential issue_"
           issues_json=$(gh api graphql -f query="$graphql_query" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -F prNumber="$PR_NUMBER" \
-            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai[bot]" and (.body | contains("⚠️ Potential issue")))]')
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai" and (.body | contains("_⚠️ Potential issue_")))]')
           
           issue_count=$(echo "$issues_json" | jq 'length')
           echo "Final issue count is: $issue_count"
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
-          # Phần xây dựng bảng tóm tắt không thay đổi
+          # Phần xây dựng bảng tóm tắt
           SUMMARY_BODY="### 🔍 Phân tích từ CodeRabbit\n\n"
           if [ "$issue_count" -gt 0 ]; then
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue' chưa được giải quyết.</font>** Cần phải xử lý trước khi merge.\n\n"
@@ -80,7 +77,6 @@ jobs:
       - name: Create or Update Summary Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          # Lấy trực tiếp từ context, không cần qua bước trung gian
           issue-number: ${{ github.event.pull_request.number }}
           comment-id: ${{ github.event.pull_request.number }}-${{ github.job }}
           body: ${{ steps.generate_summary.outputs.summary_body }}
@@ -89,7 +85,6 @@ jobs:
       - name: Approve or Request Changes based on Issue Count
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Lấy trực tiếp từ context để đảm bảo an toàn
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
