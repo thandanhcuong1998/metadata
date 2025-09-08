@@ -1,53 +1,46 @@
 name: Check CodeRabbit Review and Label PR
 
 on:
-  # Kích hoạt khi có comment được tạo ra trên một Issue hoặc Pull Request
-  issue_comment:
-    types: [created]
+  pull_request_review:
+    types: [submitted]
 
 jobs:
   evaluate_codereview:
-    # Điều kiện để chạy job:
-    # 1. Đây là một sự kiện trên Pull Request.
-    # 2. Người comment là bot của CodeRabbit (bạn cần xác nhận username này).
-    # 3. Nội dung comment chứa chuỗi đặc trưng báo hiệu review đã xong.
-    if: |
-      github.event.issue.pull_request &&
-      github.event.comment.user.login == 'coderabbitai[bot]' &&
-      contains(github.event.comment.body, 'CodeRabbit AI Code Review')
+    if: github.event.review.user.login == 'coderabbitai[bot]'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
-      contents: read # Cần quyền read để lấy code nếu cần, nhưng chủ yếu là để gọi API
+      contents: read
 
     steps:
-      - name: Get PR Number
-        id: get_pr_number
+      # --- THÊM BƯỚC QUAN TRỌNG NÀY VÀO ---
+      # Tải mã nguồn về môi trường chạy để các lệnh `gh` và `git` có thể hoạt động
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get PR Information
+        id: get_pr_info
         run: |
-          # Lấy số PR từ payload của sự kiện issue_comment
-          pr_number=$(jq --raw-output .issue.number "$GITHUB_EVENT_PATH")
-          echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          echo "pr_head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
 
       - name: Wait for API to be consistent
-        run: sleep 15s # Thêm một khoảng chờ ngắn để đảm bảo tất cả comment đã được API ghi nhận đầy đủ sau khi trigger
+        run: sleep 10s
 
-      - name: Check for "Potential issue" comments
+      - name: Check for "Potential issue" labels in review comments
         id: check_comments
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
+          PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
           REPO_FULL_NAME: ${{ github.repository }}
         run: |
-          # Sử dụng GitHub CLI để gọi API
-          # Lấy tất cả các comment review (comment trên dòng code) trong PR
           comments=$(gh api \
             "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/comments" \
             --jq '.[] | select(.user.login == "coderabbitai[bot]") | .body')
 
-          # Đếm số lượng comment có chứa "Potential issue"
           issue_count=0
           while IFS= read -r comment; do
-            if echo "$comment" | grep -q "Potential issue"; then
+            if echo "$comment" | grep -i -q "Potential issue"; then
               issue_count=$((issue_count + 1))
             fi
           done <<< "$comments"
@@ -55,26 +48,27 @@ jobs:
           echo "Found $issue_count 'Potential issue' comments."
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
+      # Bước này sẽ làm workflow thất bại nếu issue > 3
       - name: Set PR status to failure if issue count exceeds threshold
         if: steps.check_comments.outputs.issue_count > 3
         run: |
           echo "Number of 'Potential issue' comments is greater than 3. Failing the check."
           exit 1
 
+      # Bước này chỉ chạy nếu issue < 3
       - name: Add "READY TO MERGE" label if criteria are met
         if: steps.check_comments.outputs.issue_count < 3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
         run: |
           echo "All checks passed. Adding 'READY TO MERGE' label."
-          gh pr edit ${{ steps.get_pr_number.outputs.pr_number }} --add-label "READY TO MERGE"
+          gh pr edit ${{ steps.get_pr_info.outputs.pr_number }} --add-label "READY TO MERGE"
 
+      # Bước này sẽ chạy nếu issue >= 3 để gỡ label đi (nếu trước đó nó đã được thêm)
       - name: Remove "READY TO MERGE" label if criteria are not met anymore
         if: steps.check_comments.outputs.issue_count >= 3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
         run: |
           echo "Criteria not met. Removing 'READY TO MERGE' label if it exists."
-          gh pr edit ${{ steps.get_pr_number.outputs.pr_number }} --remove-label "READY TO MERGE" || true
+          gh pr edit ${{ steps.get_pr_info.outputs.pr_number }} --remove-label "READY TO MERGE" || true
