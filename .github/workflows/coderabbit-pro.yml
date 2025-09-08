@@ -9,12 +9,11 @@ jobs:
     if: github.event.review.user.login == 'coderabbitai[bot]'
     runs-on: ubuntu-latest
     permissions:
+      # Cần quyền `write` để đăng/sửa comment và label
       pull-requests: write
       contents: read
 
     steps:
-      # --- THÊM BƯỚC QUAN TRỌNG NÀY VÀO ---
-      # Tải mã nguồn về môi trường chạy để các lệnh `gh` và `git` có thể hoạt động
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -22,53 +21,71 @@ jobs:
         id: get_pr_info
         run: |
           echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          echo "pr_head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
 
-      - name: Wait for API to be consistent
-        run: sleep 10s
-
-      - name: Check for "Potential issue" labels in review comments
-        id: check_comments
+      - name: Generate Summary from Review Comments
+        id: generate_summary
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
           REPO_FULL_NAME: ${{ github.repository }}
         run: |
-          comments=$(gh api \
+          # 1. Lấy cả nội dung (body) và link (html_url) của comment
+          # Kết quả trả về là một chuỗi JSON
+          issues_json=$(gh api \
             "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/comments" \
-            --jq '.[] | select(.user.login == "coderabbitai[bot]") | .body')
+            --jq '[.[] | select(.user.login == "coderabbitai[bot]" and (.body | test("Potential issue"; "i"))) | {body: .body, url: .html_url}]')
 
-          issue_count=0
-          while IFS= read -r comment; do
-            if echo "$comment" | grep -i -q "Potential issue"; then
-              issue_count=$((issue_count + 1))
-            fi
-          done <<< "$comments"
-
-          echo "Found $issue_count 'Potential issue' comments."
+          # 2. Đếm số lượng issue từ JSON
+          issue_count=$(echo "$issues_json" | jq 'length')
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
-      # Bước này sẽ làm workflow thất bại nếu issue > 3
+          # 3. Xây dựng nội dung comment (bảng Markdown)
+          SUMMARY_BODY="### 🔍 Phân tích từ CodeRabbit\n\n" # Tiêu đề
+
+          if [ "$issue_count" -gt 0 ]; then
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue'.</font>** Cần phải xử lý trước khi merge.\n\n"
+            SUMMARY_BODY="${SUMMARY_BODY}| Vấn đề được phát hiện | Xem chi tiết |\n"
+            SUMMARY_BODY="${SUMMARY_BODY}| --- | --- |\n"
+            
+            # Dùng `jq` để lặp qua từng issue và thêm một dòng vào bảng
+            # Lấy dòng đầu tiên của comment để làm tóm tắt
+            table_rows=$(echo "$issues_json" | jq -r '.[] | "| `\(.body | split("\n")[0])` | [Link tới comment](\(.url)) |"')
+            SUMMARY_BODY="${SUMMARY_BODY}${table_rows}"
+          else
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Không tìm thấy 'Potential issue' nào.\n"
+          fi
+
+          SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
+          
+          echo "summary_body<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # Bước mới: Đăng hoặc cập nhật comment tóm tắt lên PR
+      - name: Create or Update Summary Comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          pr-number: ${{ steps.get_pr_info.outputs.pr_number }}
+          comment-id: ${{ github.event.pull_request.number }}-${{ github.job }} # ID duy nhất để action biết cần cập nhật comment nào
+          body: ${{ steps.generate_summary.outputs.summary_body }}
+          edit-mode: replace
+
       - name: Set PR status to failure if issue count exceeds threshold
-        if: steps.check_comments.outputs.issue_count > 3
+        if: steps.generate_summary.outputs.issue_count > 3
         run: |
           echo "Number of 'Potential issue' comments is greater than 3. Failing the check."
           exit 1
 
-      # Bước này chỉ chạy nếu issue < 3
       - name: Add "READY TO MERGE" label if criteria are met
-        if: steps.check_comments.outputs.issue_count < 3
+        if: steps.generate_summary.outputs.issue_count < 3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "All checks passed. Adding 'READY TO MERGE' label."
           gh pr edit ${{ steps.get_pr_info.outputs.pr_number }} --add-label "READY TO MERGE"
 
-      # Bước này sẽ chạy nếu issue >= 3 để gỡ label đi (nếu trước đó nó đã được thêm)
       - name: Remove "READY TO MERGE" label if criteria are not met anymore
-        if: steps.check_comments.outputs.issue_count >= 3
+        if: steps.generate_summary.outputs.issue_count >= 3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Criteria not met. Removing 'READY TO MERGE' label if it exists."
           gh pr edit ${{ steps.get_pr_info.outputs.pr_number }} --remove-label "READY TO MERGE" || true
