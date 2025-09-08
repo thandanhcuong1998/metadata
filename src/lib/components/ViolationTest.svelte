@@ -27,23 +27,23 @@
     alert('Image clicked!');
   }
 </script>
-
+11
 <h1>User List</h1>
 
 <ul>
-  {#each users as user}
-    <li>{user.name}</li>
+  {#each users as user}11
+    <li>{user.name}</li>11
   {/each}
 </ul>
 
 <img 
-  src="/icons/refresh-icon.svg" 
-  on:click={handleClick} 
+  src="/icons/refresh-icon.svg" 11
+  on:click={handleClick} 11
   style="cursor: pointer; width: 24px; height: 24px;"
 />
 
 <style>
   li {
-    color: blue;11
+    color: blue;1111
   }
 </style>
