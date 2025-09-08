@@ -1,18 +1,76 @@
-# File: .github/workflows/ultimate-debug.yml
-# MỤC ĐÍCH: Bắt và in ra TẤT CẢ các sự kiện liên quan để tìm ra sự kiện chính xác của Coderabbit
+name: '[DEBUG] Check CodeRabbit Review'
 
-name: Ultimate Event Debugger
-
-on: [push, pull_request, check_run, check_suite, status] # Lắng nghe TẤT CẢ các sự kiện có thể xảy ra
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [resolved]
 
 jobs:
-  debug:
-    name: Dump Event Context
+  # Tên job tạm thời đổi thành debug_evaluation
+  debug_evaluation:
+    if: |
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai[bot]')
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+      # Thêm quyền actions:write để có thể tự hủy workflow
+      actions: write
+
     steps:
-      - name: Print Event Details
+      - name: Get PR Information
+        id: get_pr_info
         run: |
-          echo "Workflow triggered by event: ${{ github.event_name }}"
-          echo "----------------------------------------------------"
-          # In ra toàn bộ nội dung của sự kiện dưới dạng JSON
-          echo "${{ toJSON(github.event) }}"
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          echo "repo_owner=${{ github.repository_owner }}" >> $GITHUB_OUTPUT
+          echo "repo_name=${{ github.event.repository.name }}" >> $GITHUB_OUTPUT
+
+      - name: '[SUPER DEBUG] Print Raw GraphQL Data'
+        id: super_debug
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
+          REPO_OWNER: ${{ steps.get_pr_info.outputs.repo_owner }}
+          REPO_NAME: ${{ steps.get_pr_info.outputs.repo_name }}
+        run: |
+          echo "--- Starting SUPER DEBUG for Issue Counting ---"
+          graphql_query='
+            query($owner: String!, $name: String!, $prNumber: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $prNumber) {
+                  reviewThreads(first: 100) {
+                    nodes {
+                      isResolved
+                      comments(first: 20) {
+                        nodes {
+                          author { login }
+                          body
+                          url
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }'
+          
+          echo "Step 1: Fetching raw JSON data from GraphQL API..."
+          full_json=$(gh api graphql -f query="$graphql_query" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -F prNumber="$PR_NUMBER")
+          
+          if [ -z "$full_json" ]; then
+            echo "::error::GraphQL query returned NO DATA. Aborting."
+            exit 1
+          fi
+          
+          echo "Step 2: Printing the FULL, UNFILTERED GraphQL response."
+          # Đây là phần quan trọng nhất, nó sẽ cho thấy tất cả dữ liệu thô
+          echo "$full_json"
+          
+          echo "--- DEBUGGING COMPLETE ---"
+          echo "::warning::This workflow run was for debugging purposes only and will now be canceled."
+          
+          # Tự động hủy workflow run này để nó không hiện là 'Failed'
+          gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel -X POST
+          exit 1
