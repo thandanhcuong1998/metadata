@@ -1,50 +1,52 @@
 name: Check CodeRabbit Review and Label PR
 
 on:
-  # Kích hoạt khi có comment được tạo ra trên một Issue hoặc Pull Request
   issue_comment:
     types: [created]
 
 jobs:
   evaluate_codereview:
-    # Điều kiện để chạy job:
-    # 1. Đây là một sự kiện trên Pull Request.
-    # 2. Người comment là bot của CodeRabbit (bạn cần xác nhận username này).
-    # 3. Nội dung comment chứa chuỗi đặc trưng báo hiệu review đã xong.
+    # --- THAY ĐỔI QUAN TRỌNG Ở ĐÂY ---
+    # Điều kiện mới: lắng nghe comment tóm tắt có chứa "Summary by CodeRabbit"
     if: |
       github.event.issue.pull_request &&
       github.event.comment.user.login == 'coderabbitai[bot]' &&
-      contains(github.event.comment.body, 'CodeRabbit AI Code Review')
+      contains(github.event.comment.body, 'Summary by CodeRabbit')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
-      contents: read # Cần quyền read để lấy code nếu cần, nhưng chủ yếu là để gọi API
+      contents: read
 
     steps:
+      - name: Debug Event Data
+        run: |
+          echo "Workflow triggered by user: ${{ github.event.comment.user.login }}"
+          echo "Comment body starts with..."
+          echo "${{ github.event.comment.body }}" | head -c 200
+
       - name: Get PR Number
         id: get_pr_number
         run: |
-          # Lấy số PR từ payload của sự kiện issue_comment
           pr_number=$(jq --raw-output .issue.number "$GITHUB_EVENT_PATH")
           echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
 
       - name: Wait for API to be consistent
-        run: sleep 15s # Thêm một khoảng chờ ngắn để đảm bảo tất cả comment đã được API ghi nhận đầy đủ sau khi trigger
+        run: sleep 15s
 
-      - name: Check for "Potential issue" comments
+      - name: Check for "Potential issue" labels in review comments
         id: check_comments
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
           REPO_FULL_NAME: ${{ github.repository }}
         run: |
-          # Sử dụng GitHub CLI để gọi API
-          # Lấy tất cả các comment review (comment trên dòng code) trong PR
+          # API này sẽ lấy tất cả các comment review (comment trên từng dòng code)
           comments=$(gh api \
             "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/comments" \
             --jq '.[] | select(.user.login == "coderabbitai[bot]") | .body')
 
-          # Đếm số lượng comment có chứa "Potential issue"
+          # Đếm số lượng comment có chứa chuỗi "Potential issue"
+          # LƯU Ý: Hãy chắc chắn rằng đây là chuỗi văn bản chính xác
           issue_count=0
           while IFS= read -r comment; do
             if echo "$comment" | grep -q "Potential issue"; then
@@ -65,7 +67,6 @@ jobs:
         if: steps.check_comments.outputs.issue_count < 3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
         run: |
           echo "All checks passed. Adding 'READY TO MERGE' label."
           gh pr edit ${{ steps.get_pr_number.outputs.pr_number }} --add-label "READY TO MERGE"
@@ -74,7 +75,6 @@ jobs:
         if: steps.check_comments.outputs.issue_count >= 3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
         run: |
           echo "Criteria not met. Removing 'READY TO MERGE' label if it exists."
           gh pr edit ${{ steps.get_pr_number.outputs.pr_number }} --remove-label "READY TO MERGE" || true
