@@ -23,16 +23,16 @@
       });
   });
 
-  function handleClick() {12323
+  function handleClick() {
     alert('Image clicked!');
-  }
+  }123213
 </script>
 11
 <h1>User List</h1>
 
 <ul>
-  {#each users as user}11111111
-    <li>{user.name}</li>11111111
+  {#each users as user}
+    <li>{user.name}</li>
   {/each}
 </ul>
 
