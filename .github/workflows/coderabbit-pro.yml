@@ -1,14 +1,24 @@
 name: Check CodeRabbit Review and Label PR
 
 on:
+  # Chạy khi có review mới được nộp (lần đầu CodeRabbit chạy)
   pull_request_review:
     types: [submitted]
+  # Chạy lại khi một comment review được giải quyết (resolved)
+  pull_request_review_comment:
+    types: [resolved]
 
 jobs:
   evaluate_codereview:
-    if: github.event.review.user.login == 'coderabbitai[bot]'
+    # Điều kiện chạy:
+    # 1. Nếu là sự kiện nộp review, người nộp phải là bot.
+    # 2. Nếu là sự kiện giải quyết comment, comment đó phải là của bot.
+    if: |
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai[bot]')
     runs-on: ubuntu-latest
     permissions:
+      # Cần quyền `write` để đăng/sửa comment, review và label
       pull-requests: write
       contents: read
 
@@ -20,32 +30,57 @@ jobs:
         id: get_pr_info
         run: |
           echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          echo "repo_owner=$(echo '${{ github.repository }}' | cut -d '/' -f 1)" >> $GITHUB_OUTPUT
+          echo "repo_name=$(echo '${{ github.repository }}' | cut -d '/' -f 2)" >> $GITHUB_OUTPUT
 
-      - name: Generate Summary from Review Comments
+      - name: Generate Summary from Unresolved Comments (GraphQL)
         id: generate_summary
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
-          REPO_FULL_NAME: ${{ github.repository }}
+          REPO_OWNER: ${{ steps.get_pr_info.outputs.repo_owner }}
+          REPO_NAME: ${{ steps.get_pr_info.outputs.repo_name }}
         run: |
-          issues_json=$(gh api \
-            "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/comments" \
-            --jq '[.[] | select(.user.login == "coderabbitai[bot]" and (.body | test("Potential issue"; "i"))) | {body: .body, url: .html_url}]')
+          # Sử dụng GraphQL API để lấy các comment CHƯA được resolve
+          graphql_query='
+            query($owner: String!, $name: String!, $prNumber: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $prNumber) {
+                  reviewThreads(first: 50) {
+                    nodes {
+                      comments(first: 20) {
+                        nodes {
+                          author { login }
+                          body
+                          url
+                          isResolved
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }'
 
+          # Lọc ra các comment CHƯA RESOLVE của bot và có chứa "Potential issue"
+          issues_json=$(gh api graphql -f query="$graphql_query" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f prNumber="$PR_NUMBER" \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[].comments.nodes[] | select(.isResolved == false and .author.login == "coderabbitai[bot]" and (.body | test("Potential issue"; "i")))]')
+          
           issue_count=$(echo "$issues_json" | jq 'length')
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
+          # Xây dựng bảng tóm tắt
           SUMMARY_BODY="### 🔍 Phân tích từ CodeRabbit\n\n"
 
           if [ "$issue_count" -gt 0 ]; then
-            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue'.</font>** Cần phải xử lý trước khi merge.\n\n"
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue' chưa được giải quyết.</font>** Cần phải xử lý trước khi merge.\n\n"
             SUMMARY_BODY="${SUMMARY_BODY}| Vấn đề được phát hiện | Xem chi tiết |\n"
             SUMMARY_BODY="${SUMMARY_BODY}| --- | --- |\n"
             
             table_rows=$(echo "$issues_json" | jq -r '.[] | "| `\(.body | split("\n")[0])` | [Link tới comment](\(.url)) |"')
             SUMMARY_BODY="${SUMMARY_BODY}${table_rows}"
           else
-            SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Không tìm thấy 'Potential issue' nào.\n"
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Tất cả 'Potential issue' đã được giải quyết.\n"
           fi
 
           SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
@@ -57,28 +92,30 @@ jobs:
       - name: Create or Update Summary Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          # SỬA LỖI: Đổi 'pr-number' thành 'issue-number'
           issue-number: ${{ steps.get_pr_info.outputs.pr_number }}
           comment-id: ${{ github.event.pull_request.number }}-${{ github.job }}
           body: ${{ steps.generate_summary.outputs.summary_body }}
           edit-mode: replace
 
-      - name: Set PR status to failure if issue count exceeds threshold
-        if: steps.generate_summary.outputs.issue_count > 3
-        run: |
-          echo "Number of 'Potential issue' comments is greater than 3. Failing the check."
-          exit 1
-
-      - name: Add "READY TO MERGE" label if criteria are met
-        if: steps.generate_summary.outputs.issue_count < 3
+      - name: Approve or Request Changes based on Issue Count
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
         run: |
-          gh pr edit ${{ steps.get_pr_info.outputs.pr_number }} --add-label "READY TO MERGE"
-
-      - name: Remove "READY TO MERGE" label if criteria are not met anymore
-        if: steps.generate_summary.outputs.issue_count >= 3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr edit ${{ steps.get_pr_info.outputs.pr_number }} --remove-label "READY TO MERGE" || true
+          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
+            echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }}."
+            gh pr review $PR_NUMBER --request-changes --body "Tự động yêu cầu thay đổi do số lượng 'Potential issue' (${{ steps.generate_summary.outputs.issue_count }}) vượt quá ngưỡng cho phép (3)."
+            gh pr edit $PR_NUMBER --remove-label "READY TO MERGE" || true
+          else
+            echo "Approving because issue count is ${{ steps.generate_summary.outputs.issue_count }}."
+            # Tìm và dismiss các review "request changes" cũ của chính action này (nếu có) để mở khóa PR
+            EXISTING_REVIEW_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED") | .id' | tail -n 1)
+            if [ -n "$EXISTING_REVIEW_ID" ]; then
+              echo "Dismissing previous 'Changes Requested' review (ID: $EXISTING_REVIEW_ID)."
+              gh pr review --dismiss "$EXISTING_REVIEW_ID" --body "Các vấn đề đã được giải quyết, số lượng 'Potential issue' đã nằm trong ngưỡng cho phép."
+            fi
+            
+            # Approve PR
+            gh pr review $PR_NUMBER --approve --body "Tất cả 'Potential issue' đã nằm trong ngưỡng cho phép (${{ steps.generate_summary.outputs.issue_count }} <= 3). Sẵn sàng để merge!"
+            gh pr edit $PR_NUMBER --add-label "READY TO MERGE"
+          fi
