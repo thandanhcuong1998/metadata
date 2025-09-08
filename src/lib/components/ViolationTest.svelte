@@ -16,7 +16,7 @@
     // VIOLATION [high]: No fetch in .svelte files. Vi phạm SG-07011
     fetch("/api/users")
       .then(res => res.json());
-      .then(data => {111
+      .then(data => {
         users = data;11111
         // VIOLATION [low]: Debugging logs should be removed from producti11on code. (Lỗi style phổ biến);
         console.log("Users loaded", users, bad_constant, apiKey);1111
