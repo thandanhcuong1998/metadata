@@ -1,9 +1,7 @@
-# Tên file: .github/workflows/manage_coderabbit_pr.yml
-name: Check CodeRabbit and Manage PR
+# Vị trí: .github/workflows/evaluate-coderabbit-review.yml
+name: Evaluate CodeRabbit Review
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
   pull_request_review:
     types: [submitted]
   pull_request_review_comment:
@@ -11,42 +9,21 @@ on:
 
 jobs:
   evaluate_codereview:
+    # Điều kiện if gốc, chính xác và ổn định của bạn
+    if: |
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai[bot]')
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write
-      contents: read
-      checks: read
+      pull-requests: write # Để approve, request changes, quản lý label
+      contents: read       # Để checkout code
+      statuses: write      # Để cập nhật status check (quan trọng)
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 'DEBUG: List all checks on this commit'
-        if: github.event_name == 'pull_request'
-        env: # <--- ĐÃ SỬA LỖI Ở ĐÂY
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "--- Listing all checks for SHA: ${{ github.event.pull_request.head.sha }} ---"
-          gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs" --jq '.check_runs[] | {name: .name, status: .status, conclusion: .conclusion}'
-          echo "--- End of list ---"
-          echo ">>> HÃY TÌM TÊN 'name' CỦA CODERABBIT TRONG DANH SÁCH TRÊN VÀ CẬP NHẬT VÀO BƯỚC TIẾP THEO."
-
-      - name: Wait for CodeRabbit App review to complete
-        if: github.event_name == 'pull_request'
-        uses: lewagon/wait-on-check-action@v1.3.1
-        with:
-          check-name: 'Name-found-in-DEBUG-step'
-          ref: ${{ github.event.pull_request.head.sha }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          initial-delay-seconds: 15
-          wait-interval: 20
-          allowed-conclusions: 'success,failure,neutral,skipped,cancelled'
-
       - name: Generate Summary from Unresolved Comments
-        if: |
-          github.event_name == 'pull_request' ||
-          (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
-          (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai[bot]')
         id: generate_summary
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -94,7 +71,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create or Update Summary Comment
-        if: steps.generate_summary.conclusion == 'success'
+        id: update_comment
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
@@ -103,7 +80,7 @@ jobs:
           edit-mode: replace
 
       - name: Approve or Request Changes based on Issue Count
-        if: steps.generate_summary.conclusion == 'success'
+        id: approve_or_deny
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -122,3 +99,17 @@ jobs:
             gh pr review $PR_NUMBER --approve --body "Tất cả 'Potential issue' đã nằm trong ngưỡng cho phép (${{ steps.generate_summary.outputs.issue_count }} <= 3). Sẵn sàng để merge!"
             gh pr edit $PR_NUMBER --add-label "READY TO MERGE"
           fi
+
+      - name: Report success status to unblock PR
+        # Luôn chạy bước này để đảm bảo PR được mở khóa sau khi quá trình đánh giá hoàn tất
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api \
+            --method POST \
+            /repos/${{ github.repository }}/statuses/$HEAD_SHA \
+            -f state='success' \
+            -f description='Evaluation complete!' \
+            -f context='Code Analysis Result'

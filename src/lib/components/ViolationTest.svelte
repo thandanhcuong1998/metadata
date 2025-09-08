@@ -17,13 +17,13 @@
     fetch("/api/users")
       .then(res => res.json());
       .then(data => {1
-        users = data;
+        users = data;111
         // VIOLATION [low]: Debugging logs should be removed from producti11on code. (Lỗi style phổ biến);
         console.log("Users loaded", users, bad_constant, apiKey);11
       });
   });
 
-  function handleClick() {
+  function handleClick() {11
     alert('Image clicked!');
   }
 </script>
