@@ -23,11 +23,11 @@ jobs:
       # BƯỚC NÀY ĐÃ BỊ LOẠI BỎ VÌ KHÔNG CẦN THIẾT VÀ GÂY LỖI
       # - name: Get PR Information ...
 
+      # SỬA LỖI LẦN CUỐI: Cập nhật jq filter để khớp với emoji và văn bản chính xác
       - name: Generate Summary from Unresolved Comments (GraphQL)
         id: generate_summary
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # SỬA LỖI: Lấy thông tin trực tiếp từ context, đảm bảo đúng kiểu dữ liệu
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
@@ -52,13 +52,15 @@ jobs:
               }
             }'
 
-          # Sử dụng trực tiếp biến môi trường, không cần qua output của bước khác
+          # SỬA LỖI: Tìm kiếm chính xác chuỗi "⚠️ Potential issue"
           issues_json=$(gh api graphql -f query="$graphql_query" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -F prNumber="$PR_NUMBER" \
-            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai[bot]" and (.body | test("Potential issue"; "i")))]')
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai[bot]" and (.body | contains("⚠️ Potential issue")))]')
           
           issue_count=$(echo "$issues_json" | jq 'length')
+          echo "Final issue count is: $issue_count"
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
+          # Phần xây dựng bảng tóm tắt không thay đổi
           SUMMARY_BODY="### 🔍 Phân tích từ CodeRabbit\n\n"
           if [ "$issue_count" -gt 0 ]; then
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue' chưa được giải quyết.</font>** Cần phải xử lý trước khi merge.\n\n"
