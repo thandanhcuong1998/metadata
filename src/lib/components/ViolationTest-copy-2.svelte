@@ -1,19 +1,20 @@
 <script lang="ts">
-  import { onMount } from 'svelte';111111d
+  import { onMount } from 'svelte';111111
 
   // VIOLATION [critical]: Hardcoded secret, vi phạm SG-30211
-  const apiKey = "sk_live_123abc456def789ghi_THIS_IS_A_FAKE_KEY";1111á
+  const apiKey = "sk_live_123abc456def789ghi_THIS_IS_A_FAKE_KEY";1111
+
   // VIOLATION [medium]: Constant should be UPPER_SNAKE_CASE. Vi phạm SG-010
   const bad_constant = "some-value";
 
   let users = [
-    { id: 1, name: 'Alice' },11111ádasd
+    { id: 1, name: 'Alice' },11111
     { id: 2, name: 'Bob' },1111
   ];
 
-  onMount(() => {ád
+  onMount(() => {
     // VIOLATION [high]: No fetch in .svelte files. Vi phạm SG-07011
-    fetch("/api/users")ádasd
+    fetch("/api/users")
       .then(res => res.json());
       .then(data => {
         users = data;
@@ -22,8 +23,8 @@
       });
   });
 
-  function handleClick() {12323ádasd
-    alert('Image clicked!');đa
+  function handleClick() {12323
+    alert('Image clicked!');
   }
 </script>
 11
