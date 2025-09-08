@@ -20,23 +20,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get PR Information
-        id: get_pr_info
-        run: |
-          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          echo "repo_owner=$(echo '${{ github.repository }}' | cut -d '/' -f 1)" >> $GITHUB_OUTPUT
-          echo "repo_name=$(echo '${{ github.repository }}' | cut -d '/' -f 2)" >> $GITHUB_OUTPUT
+      # BƯỚC NÀY ĐÃ BỊ LOẠI BỎ VÌ KHÔNG CẦN THIẾT VÀ GÂY LỖI
+      # - name: Get PR Information ...
 
       - name: Generate Summary from Unresolved Comments (GraphQL)
         id: generate_summary
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
-          REPO_OWNER: ${{ steps.get_pr_info.outputs.repo_owner }}
-          REPO_NAME: ${{ steps.get_pr_info.outputs.repo_name }}
+          # SỬA LỖI: Lấy thông tin trực tiếp từ context, đảm bảo đúng kiểu dữ liệu
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
         run: |
-          # --- SỬA LẠI GRAPHQL QUERY ---
-          # Lấy isResolved từ 'reviewThreads', không phải từ 'comments'
           graphql_query='
             query($owner: String!, $name: String!, $prNumber: Int!) {
               repository(owner: $owner, name: $name) {
@@ -57,16 +52,13 @@ jobs:
               }
             }'
 
-          # --- SỬA LẠI LỆNH JQ ĐỂ LỌC THEO CẤU TRÚC MỚI ---
-          # 1. Lọc các thread CHƯA RESOLVE.
-          # 2. Từ các thread đó, lấy ra các comment của bot chứa "Potential issue".
-          issues_json=$(gh api graphql -f query="$graphql_query" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -f prNumber="$PR_NUMBER" \
+          # Sử dụng trực tiếp biến môi trường, không cần qua output của bước khác
+          issues_json=$(gh api graphql -f query="$graphql_query" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -F prNumber="$PR_NUMBER" \
             --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai[bot]" and (.body | test("Potential issue"; "i")))]')
           
           issue_count=$(echo "$issues_json" | jq 'length')
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
-          # --- Phần xây dựng bảng tóm tắt không thay đổi ---
           SUMMARY_BODY="### 🔍 Phân tích từ CodeRabbit\n\n"
           if [ "$issue_count" -gt 0 ]; then
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue' chưa được giải quyết.</font>** Cần phải xử lý trước khi merge.\n\n"
@@ -78,6 +70,7 @@ jobs:
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Tất cả 'Potential issue' đã được giải quyết.\n"
           fi
           SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
+          
           echo "summary_body<<EOF" >> $GITHUB_OUTPUT
           echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -85,7 +78,8 @@ jobs:
       - name: Create or Update Summary Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ steps.get_pr_info.outputs.pr_number }}
+          # Lấy trực tiếp từ context, không cần qua bước trung gian
+          issue-number: ${{ github.event.pull_request.number }}
           comment-id: ${{ github.event.pull_request.number }}-${{ github.job }}
           body: ${{ steps.generate_summary.outputs.summary_body }}
           edit-mode: replace
@@ -93,7 +87,8 @@ jobs:
       - name: Approve or Request Changes based on Issue Count
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
+          # Lấy trực tiếp từ context để đảm bảo an toàn
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
             echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }}."
