@@ -1,99 +1,80 @@
-# File: .github/workflows/coderabbit-pro.yml
+name: Check CodeRabbit Review and Label PR
 
-name: CodeRabbit Pro – Policy Gate
-
-# <<< SỬA ĐỔI 1: Thay đổi hoàn toàn trigger của workflow >>>
-# Workflow này sẽ chỉ chạy KHI một status check khác hoàn thành.
 on:
-  check_run:
-    types: [completed]
-
-permissions:
-  contents: read
-  pull-requests: read # Chỉ cần quyền đọc PR
-  issues: write # Cần quyền ghi issue để comment và thêm label
-  checks: read # Cần quyền đọc check_run
+  # Kích hoạt khi có comment được tạo ra trên một Issue hoặc Pull Request
+  issue_comment:
+    types: [created]
 
 jobs:
-  gate:
-    # Thêm điều kiện để job này chỉ chạy nếu status check hoàn thành là của "CodeRabbit"
-    if: github.event.check_run.name == 'CodeRabbit'
-    name: Enforce Code Review Policy
+  evaluate_codereview:
+    # Điều kiện để chạy job:
+    # 1. Đây là một sự kiện trên Pull Request.
+    # 2. Người comment là bot của CodeRabbit (bạn cần xác nhận username này).
+    # 3. Nội dung comment chứa chuỗi đặc trưng báo hiệu review đã xong.
+    if: |
+      github.event.issue.pull_request &&
+      github.event.comment.user.login == 'coderabbitai[bot]' &&
+      contains(github.event.comment.body, 'CodeRabbit AI Code Review')
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read # Cần quyền read để lấy code nếu cần, nhưng chủ yếu là để gọi API
 
     steps:
-      # <<< SỬA ĐỔI 2: Checkout code của commit đã được Coderabbit check >>>
-      - name: Checkout PR Code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.check_run.head_sha }}
+      - name: Get PR Number
+        id: get_pr_number
+        run: |
+          # Lấy số PR từ payload của sự kiện issue_comment
+          pr_number=$(jq --raw-output .issue.number "$GITHUB_EVENT_PATH")
+          echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
 
-      # <<< ĐÃ XÓA BỎ HOÀN TOÀN CÁC BƯỚC "sleep" và "wait-on-check-action" >>>
+      - name: Wait for API to be consistent
+        run: sleep 15s # Thêm một khoảng chờ ngắn để đảm bảo tất cả comment đã được API ghi nhận đầy đủ sau khi trigger
 
-      - name: Evaluate CodeRabbit findings
-        id: evaluate
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // <<< SỬA ĐỔI 3: Lấy PR number từ context của check_run >>>
-            if (context.payload.check_run.pull_requests.length === 0) {
-              core.info('This check is not associated with a pull request. Skipping.');
-              return;
-            }
-            const pr_number = context.payload.check_run.pull_requests[0].number;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
+      - name: Check for "Potential issue" comments
+        id: check_comments
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
+          REPO_FULL_NAME: ${{ github.repository }}
+        run: |
+          # Sử dụng GitHub CLI để gọi API
+          # Lấy tất cả các comment review (comment trên dòng code) trong PR
+          comments=$(gh api \
+            "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.user.login == "coderabbitai[bot]") | .body')
 
-            const [reviewComments, issueComments] = await Promise.all([
-              github.paginate(github.rest.pulls.listReviewComments, { owner, repo, pull_number: pr_number, per_page: 100 }),
-              github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr_number, per_page: 100 }),
-            ]);
-            const allComments = [...reviewComments, ...issueComments];
-            
-            const searchTerm = '⚠️ Potential issue';
-            let potential_issues = 0;
-            for (const c of allComments) {
-              if (c.user?.type === 'Bot' && c.body?.includes(searchTerm)) {
-                potential_issues++;
-              }
-            }
-            core.info(`Found: ${potential_issues} potential issues.`);
-            core.setOutput('potential_issues', String(potential_issues));
+          # Đếm số lượng comment có chứa "Potential issue"
+          issue_count=0
+          while IFS= read -r comment; do
+            if echo "$comment" | grep -q "Potential issue"; then
+              issue_count=$((issue_count + 1))
+            fi
+          done <<< "$comments"
 
-            if (potential_issues > 3) {
-              core.setFailed(`Policy failed: Found ${potential_issues} 'Potential issue' comments (threshold is >3).`);
-            }
+          echo "Found $issue_count 'Potential issue' comments."
+          echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
-      - name: Update Summary Comment
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            if (context.payload.check_run.pull_requests.length === 0) { return; }
-            const pr_number = context.payload.check_run.pull_requests[0].number;
-            const { owner, repo } = context.repo;
-            const potential_issues = '${{ steps.evaluate.outputs.potential_issues }}';
-            const conclusion = '${{ job.status }}';
-            const signature = '';
-            const body = `### 🛡️ Code Review Policy Gate\n\n` + `${signature}\n\n` + `**Result:** ${conclusion === 'success' ? '✅ Passed' : '❌ Failed'}\n\n` + `| Criterion | Count | Threshold |\n` + `|---|---|---|\n` + `| ⚠️ Potential Issues | **${potential_issues}** | Must be ≤ 3 |\n\n` + `*This check runs automatically after the main CodeRabbit review.*`;
-            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr_number });
-            const botComment = comments.find(comment => comment.user.type === 'Bot' && comment.body.includes(signature));
-            if (botComment) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: botComment.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number: pr_number, body });
-            }
+      - name: Set PR status to failure if issue count exceeds threshold
+        if: steps.check_comments.outputs.issue_count > 3
+        run: |
+          echo "Number of 'Potential issue' comments is greater than 3. Failing the check."
+          exit 1
 
-      - name: Add "READY TO MERGE" label
-        if: success() && steps.evaluate.outputs.potential_issues == '0'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            if (context.payload.check_run.pull_requests.length === 0) { return; }
-            const pr_number = context.payload.check_run.pull_requests[0].number;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const label_to_add = "READY TO MERGE";
-            await github.rest.issues.addLabels({
-              owner, repo, issue_number: pr_number, labels: [label_to_add]
-            });
+      - name: Add "READY TO MERGE" label if criteria are met
+        if: steps.check_comments.outputs.issue_count < 3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
+        run: |
+          echo "All checks passed. Adding 'READY TO MERGE' label."
+          gh pr edit ${{ steps.get_pr_number.outputs.pr_number }} --add-label "READY TO MERGE"
+
+      - name: Remove "READY TO MERGE" label if criteria are not met anymore
+        if: steps.check_comments.outputs.issue_count >= 3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.get_pr_number.outputs.pr_number }}
+        run: |
+          echo "Criteria not met. Removing 'READY TO MERGE' label if it exists."
+          gh pr edit ${{ steps.get_pr_number.outputs.pr_number }} --remove-label "READY TO MERGE" || true
