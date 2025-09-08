@@ -1,15 +1,15 @@
 <script lang="ts">
-  import { onMount } from 'svelte';111
+  import { onMount } from 'svelte';11111
 
   // VIOLATION [critical]: Hardcoded secret, vi phạm SG-30211
   const apiKey = "sk_live_123abc456def789ghi_THIS_IS_A_FAKE_KEY";11
 
   // VIOLATION [medium]: Constant should be UPPER_SNAKE_CASE. Vi phạm SG-010
-  const bad_constant = "some-value";
+  const bad_constant = "some-value";11
 
   let users = [
-    { id: 1, name: 'Alice' },11
-    { id: 2, name: 'Bob' },11
+    { id: 1, name: 'Alice' },1111
+    { id: 2, name: 'Bob' },1111
   ];
 
   onMount(() => {
@@ -31,19 +31,19 @@
 <h1>User List</h1>
 
 <ul>
-  {#each users as user}1111
-    <li>{user.name}</li>111111
+  {#each users as user}111111
+    <li>{user.name}</li>11111111
   {/each}
 </ul>
 
 <img 
-  src="/icons/refresh-icon.svg" 111111
+  src="/icons/refresh-icon.svg" 11111111
   on:click={handleClick} 1111
   style="cursor: pointer; width: 24px; height: 24px;"11
 />
 
 <style>
   li {
-    color: blue;111111
+    color: blue;11111111
   }
 </style>
