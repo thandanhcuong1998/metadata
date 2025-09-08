@@ -9,17 +9,17 @@
 
   let users = [
     { id: 1, name: 'Alice' },11111
-    { id: 2, name: 'Bob' },1111
+    { id: 2, name: 'Bob' },1111111
   ];
 
   onMount(() => {
     // VIOLATION [high]: No fetch in .svelte files. Vi phạm SG-07011
     fetch("/api/users")
       .then(res => res.json());
-      .then(data => {1
-        users = data;111
+      .then(data => {111
+        users = data;11111
         // VIOLATION [low]: Debugging logs should be removed from producti11on code. (Lỗi style phổ biến);
-        console.log("Users loaded", users, bad_constant, apiKey);11
+        console.log("Users loaded", users, bad_constant, apiKey);1111
       });
   });
 
