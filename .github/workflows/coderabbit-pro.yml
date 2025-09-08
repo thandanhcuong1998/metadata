@@ -9,7 +9,6 @@ jobs:
     if: github.event.review.user.login == 'coderabbitai[bot]'
     runs-on: ubuntu-latest
     permissions:
-      # Cần quyền `write` để đăng/sửa comment và label
       pull-requests: write
       contents: read
 
@@ -29,26 +28,20 @@ jobs:
           PR_NUMBER: ${{ steps.get_pr_info.outputs.pr_number }}
           REPO_FULL_NAME: ${{ github.repository }}
         run: |
-          # 1. Lấy cả nội dung (body) và link (html_url) của comment
-          # Kết quả trả về là một chuỗi JSON
           issues_json=$(gh api \
             "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/comments" \
             --jq '[.[] | select(.user.login == "coderabbitai[bot]" and (.body | test("Potential issue"; "i"))) | {body: .body, url: .html_url}]')
 
-          # 2. Đếm số lượng issue từ JSON
           issue_count=$(echo "$issues_json" | jq 'length')
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
 
-          # 3. Xây dựng nội dung comment (bảng Markdown)
-          SUMMARY_BODY="### 🔍 Phân tích từ CodeRabbit\n\n" # Tiêu đề
+          SUMMARY_BODY="### 🔍 Phân tích từ CodeRabbit\n\n"
 
           if [ "$issue_count" -gt 0 ]; then
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue'.</font>** Cần phải xử lý trước khi merge.\n\n"
             SUMMARY_BODY="${SUMMARY_BODY}| Vấn đề được phát hiện | Xem chi tiết |\n"
             SUMMARY_BODY="${SUMMARY_BODY}| --- | --- |\n"
             
-            # Dùng `jq` để lặp qua từng issue và thêm một dòng vào bảng
-            # Lấy dòng đầu tiên của comment để làm tóm tắt
             table_rows=$(echo "$issues_json" | jq -r '.[] | "| `\(.body | split("\n")[0])` | [Link tới comment](\(.url)) |"')
             SUMMARY_BODY="${SUMMARY_BODY}${table_rows}"
           else
@@ -61,12 +54,12 @@ jobs:
           echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      # Bước mới: Đăng hoặc cập nhật comment tóm tắt lên PR
       - name: Create or Update Summary Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          pr-number: ${{ steps.get_pr_info.outputs.pr_number }}
-          comment-id: ${{ github.event.pull_request.number }}-${{ github.job }} # ID duy nhất để action biết cần cập nhật comment nào
+          # SỬA LỖI: Đổi 'pr-number' thành 'issue-number'
+          issue-number: ${{ steps.get_pr_info.outputs.pr_number }}
+          comment-id: ${{ github.event.pull_request.number }}-${{ github.job }}
           body: ${{ steps.generate_summary.outputs.summary_body }}
           edit-mode: replace
 
