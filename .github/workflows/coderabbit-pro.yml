@@ -2,61 +2,47 @@
 name: Check CodeRabbit and Manage PR
 
 on:
-  # Kích hoạt khi có commit mới, PR được mở hoặc mở lại
   pull_request:
     types: [opened, synchronize, reopened]
-  # Kích hoạt khi CodeRabbit App gửi bài review
   pull_request_review:
     types: [submitted]
-  # Kích hoạt khi một comment được giải quyết
   pull_request_review_comment:
     types: [resolved]
 
 jobs:
   evaluate_codereview:
-    # Job này sẽ luôn chạy khi được kích hoạt, không có 'if' ở đây để tránh lỗi "skipped"
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write # Để approve, request changes, quản lý label
-      contents: read       # Để checkout code
-      checks: read         # Để đọc trạng thái của các check khác (quan trọng cho bước "Wait")
+      pull-requests: write
+      contents: read
+      checks: read
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ===================================================================
-      # BƯỚC DEBUG - CHẠY BƯỚC NÀY ĐỂ TÌM TÊN CHECK CHÍNH XÁC
-      # ===================================================================
       - name: 'DEBUG: List all checks on this commit'
-        # Chỉ chạy khi có commit mới để tìm ra tên check mà bước "Wait" cần chờ
         if: github.event_name == 'pull_request'
+        env: # <--- ĐÃ SỬA LỖI Ở ĐÂY
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "--- Listing all checks for SHA: ${{ github.event.pull_request.head.sha }} ---"
           gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs" --jq '.check_runs[] | {name: .name, status: .status, conclusion: .conclusion}'
           echo "--- End of list ---"
           echo ">>> HÃY TÌM TÊN 'name' CỦA CODERABBIT TRONG DANH SÁCH TRÊN VÀ CẬP NHẬT VÀO BƯỚC TIẾP THEO."
 
-      # BƯỚC CHỜ ĐỢI - Sẽ dùng tên bạn tìm được ở trên
       - name: Wait for CodeRabbit App review to complete
-        # Chỉ chạy bước này khi có commit mới, vì các sự kiện khác có nghĩa là CodeRabbit đã chạy xong
         if: github.event_name == 'pull_request'
         uses: lewagon/wait-on-check-action@v1.3.1
         with:
-          # THAY THẾ TÊN BẠN TÌM ĐƯỢC TỪ BƯỚC DEBUG VÀO ĐÂY
-          check-name: 'Name-found-in-DEBUG-step' # <-- THAY THẾ TÊN NÀY
+          check-name: 'Name-found-in-DEBUG-step'
           ref: ${{ github.event.pull_request.head.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          # Thêm 15 giây chờ ban đầu để tránh race condition, đảm bảo check của CodeRabbit được tạo trước
           initial-delay-seconds: 15
-          wait-interval: 20 # Chờ 20 giây giữa các lần kiểm tra
+          wait-interval: 20
           allowed-conclusions: 'success,failure,neutral,skipped,cancelled'
 
-      # ===================================================================
-      # CÁC BƯỚC PHÂN TÍCH GỐC CỦA BẠN - Giữ nguyên logic
-      # ===================================================================
       - name: Generate Summary from Unresolved Comments
-        # Điều kiện này đảm bảo step chỉ chạy khi có context phù hợp
         if: |
           github.event_name == 'pull_request' ||
           (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
