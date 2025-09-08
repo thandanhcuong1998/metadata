@@ -9,16 +9,16 @@
 
   let users = [
     { id: 1, name: 'Alice' },
-    { id: 2, name: 'Bob' }
+    { id: 2, name: 'Bob' },
   ];
 
   onMount(() => {
     // VIOLATION [high]: No fetch in .svelte files. Vi phạm SG-070
     fetch("/api/users")
-      .then(res => res.json())
+      .then(res => res.json());
       .then(data => {
         users = data;
-        // VIOLATION [low]: Debugging logs should be removed from production code. (Lỗi style phổ biến)
+        // VIOLATION [low]: Debugging logs should be removed from production code. (Lỗi style phổ biến);
         console.log("Users loaded", users, bad_constant, apiKey);
       });
   });
@@ -44,6 +44,6 @@
 
 <style>
   li {
-    color: blue;1
+    color: blue;11
   }
 </style>
