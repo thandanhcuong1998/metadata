@@ -1,3 +1,4 @@
+# Vị trí: .github/workflows/evaluate-coderabbit-review.yml
 name: Evaluate CodeRabbit Review
 
 on:
@@ -69,6 +70,7 @@ jobs:
           else
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Tất cả 'Potential issue' đã được giải quyết.\n"
           fi
+          # Thêm định danh ẩn vào cuối comment
           SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
           echo "summary_body<<EOF" >> $GITHUB_OUTPUT
           echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
@@ -79,7 +81,7 @@ jobs:
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
-          comment-id: ${{ github.event.pull_request.number }}-${{ github.job }}
+          # Xóa bỏ 'comment-id' và để action tự tìm comment để cập nhật
           body: ${{ steps.generate_summary.outputs.summary_body }}
           edit-mode: replace
 
