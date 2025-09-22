@@ -2,23 +2,20 @@
 name: Evaluate CodeRabbit Review
 
 on:
-  # Xóa bỏ trigger "pull_request: synchronize" khỏi đây
   pull_request_review:
     types: [submitted]
   pull_request_review_comment:
-    types: [created, resolved]
-  issue_comment:
-    types: [created]
+    types: [resolved]
 
 jobs:
   evaluate_codereview:
-    # Điều kiện cũng được rút gọn, không còn kiểm tra sự kiện "synchronize" nữa
     if: |
-      github.event.sender.login != 'github-actions[bot]' && (
-        (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
-        (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai[bot]') ||
-        (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login == 'coderabbitai[bot]')
-      )
+      (github.event_name == 'pull_request_review' && github.event.sender.login == 'coderabbitai[bot]') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.sender.login != 'github-actions[bot]')
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -29,14 +26,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Các bước còn lại không thay đổi logic
       - name: Generate Summary from Unresolved Comments
         id: generate_summary
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
         run: |
           graphql_query='
             query($owner: String!, $name: String!, $prNumber: Int!) {
@@ -57,7 +48,7 @@ jobs:
                 }
               }
             }'
-          issues_json=$(gh api graphql -f query="$graphql_query" -f owner="$REPO_OWNER" -f name="$REPO_NAME" -F prNumber="$PR_NUMBER" \
+          issues_json=$(gh api graphql -f query="$graphql_query" -f owner="${{ github.repository_owner }}" -f name="${{ github.event.repository.name }}" -F prNumber="$PR_NUMBER" \
             --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai" and (.body | contains("_⚠️ Potential issue_")))]')
           issue_count=$(echo "$issues_json" | jq 'length')
           echo "Final issue count is: $issue_count"
@@ -73,10 +64,10 @@ jobs:
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Tất cả 'Potential issue' đã được giải quyết.\n"
           fi
           SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n"
-          if [ "$issue_count" -gt 3 ]; then
-            SUMMARY_BODY="${SUMMARY_BODY}**<font color='orange'>⚠️ Trạng thái: Yêu cầu thay đổi.</font>** Số lượng 'Potential issue' (${issue_count}) vượt quá ngưỡng cho phép (3)."
+          if [ "$issue_count" -gt 0 ]; then
+             SUMMARY_BODY="${SUMMARY_BODY}**<font color='orange'>⚠️ Trạng thái: Yêu cầu thay đổi.</font>** Vui lòng giải quyết các vấn đề trên."
           else
-            SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>✅ Trạng thái: Phê duyệt.</font>** Tất cả 'Potential issue' đã nằm trong ngưỡng cho phép (${issue_count} <= 3). Sẵn sàng để merge!"
+             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>✅ Trạng thái: Phê duyệt.</font>** Không có 'Potential issue' nào. Sẵn sàng để merge!"
           fi
           SUMMARY_BODY="${SUMMARY_BODY}\n\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
           echo "summary_body<<EOF" >> $GITHUB_OUTPUT
@@ -86,21 +77,18 @@ jobs:
       - name: Create or Update Summary Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ github.event.pull_request.number || github.event.issue.number }}
+          issue-number: ${{ env.PR_NUMBER }}
           body: ${{ steps.generate_summary.outputs.summary_body }}
           edit-mode: replace
 
       - name: Approve or Request Changes based on Issue Count
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
-          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
+          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
             echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }}."
             gh pr review $PR_NUMBER --request-changes --body "Action: Yêu cầu thay đổi. Chi tiết xem trong comment tóm tắt."
             gh pr edit $PR_NUMBER --remove-label "READY TO MERGE" || true
           else
-            echo "Approving because issue count is ${{ steps.generate_summary.outputs.issue_count }}."
+            echo "Approving because issue count is 0."
             EXISTING_REVIEW_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED") | .id' | tail -n 1)
             if [ -n "$EXISTING_REVIEW_ID" ]; then
               echo "Dismissing previous 'Changes Requested' review (ID: $EXISTING_REVIEW_ID)."
@@ -110,18 +98,21 @@ jobs:
             gh pr edit $PR_NUMBER --add-label "READY TO MERGE"
           fi
 
-      - name: Report success status to unblock PR
+      - name: Report Final Status
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          CURRENT_SHA=${{ github.event.pull_request.head.sha }}
-          if [ -z "$CURRENT_SHA" ]; then
-            CURRENT_SHA=$(gh api /repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} --jq '.head.sha')
+          # --- THAY ĐỔI THEO GỢI Ý CỦA CODERABBIT ---
+          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
+            STATE='failure'
+            DESC="Đánh giá phát hiện thấy có ${issue_count} vấn đề chưa được giải quyết."
+          else
+            STATE='success'
+            DESC='Đánh giá hoàn tất: không có vấn đề nào.'
           fi
+
           gh api \
-            --method POST \            
-            /repos/${{ github.repository }}/statuses/$CURRENT_SHA \
-            -f state='success' \
-            -f description='Evaluation complete!' \
+            --method POST \
+            /repos/${{ github.repository }}/statuses/$HEAD_SHA \
+            -f state="$STATE" \
+            -f description="$DESC" \
             -f context='Code Analysis Result'
