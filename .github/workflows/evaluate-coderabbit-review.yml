@@ -14,10 +14,12 @@ on:
 jobs:
   evaluate_codereview:
     if: |
-      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
-      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai[bot]') ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login == 'coderabbitai[bot]') ||
-      (github.event_name == 'pull_request' && github.event.action == 'synchronize')
+      github.event.sender.login != 'github-actions[bot]' && (
+        (github.event_name == 'pull_request_review' && github.event.review.user.login == 'coderabbitai[bot]') ||
+        (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'coderabbitai[bot]') ||
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login == 'coderabbitai[bot]') ||
+        (github.event_name == 'pull_request' && github.event.action == 'synchronize')
+      )
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -32,7 +34,7 @@ jobs:
         id: generate_summary
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
         run: |
@@ -70,26 +72,24 @@ jobs:
           else
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Tất cả 'Potential issue' đã được giải quyết.\n"
           fi
-          # Thêm định danh ẩn vào cuối comment
+
           SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
+          
           echo "summary_body<<EOF" >> $GITHUB_OUTPUT
           echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create or Update Summary Comment
-        id: update_comment
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ github.event.pull_request.number }}
-          # Xóa bỏ 'comment-id' và để action tự tìm comment để cập nhật
+          issue-number: ${{ github.event.pull_request.number || github.event.issue.number }}
           body: ${{ steps.generate_summary.outputs.summary_body }}
           edit-mode: replace
 
       - name: Approve or Request Changes based on Issue Count
-        id: approve_or_deny
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
             echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }}."
@@ -112,9 +112,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # Sửa lại điều kiện lấy HEAD_SHA cho chắc chắn
+          CURRENT_SHA=${{ github.event.pull_request.head.sha }}
+          if [ -z "$CURRENT_SHA" ]; then
+            # Lấy SHA từ issue context nếu không có từ PR context
+            CURRENT_SHA=$(gh api /repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} --jq '.head.sha')
+          fi
           gh api \
             --method POST \
-            /repos/${{ github.repository }}/statuses/$HEAD_SHA \
+            /repos/${{ github.repository }}/statuses/$CURRENT_SHA \
             -f state='success' \
             -f description='Evaluation complete!' \
             -f context='Code Analysis Result'
