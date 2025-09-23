@@ -105,20 +105,32 @@ jobs:
             gh pr review $PR_NUMBER --request-changes --body "Action: Yêu cầu thay đổi. Chi tiết xem trong comment tóm tắt."
             gh pr edit $PR_NUMBER --remove-label "READY TO MERGE" || true
           else
-            echo "Approving because issue count is ${{ steps.generate_summary.outputs.issue_count }} (<=3)."
-            EXISTING_REVIEW_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED") | .id' | tail -n 1)
-            if [ -n "$EXISTING_REVIEW_ID" ]; then
-              echo "Dismissing previous 'Changes Requested' review (ID: $EXISTING_REVIEW_ID)."
-              gh pr review --dismiss "$EXISTING_REVIEW_ID" --body "Các vấn đề trước đó đã được giải quyết."
+            echo "Issue count is ${{ steps.generate_summary.outputs.issue_count }} (<=3). Checking for existing approval."
+
+            EXISTING_APPROVAL_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "APPROVED") | .id' | tail -n 1)
+
+            if [ -z "$EXISTING_APPROVAL_ID" ]; then
+              echo "No existing approval found. Submitting a new approval."
+
+              EXISTING_REVIEW_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED") | .id' | tail -n 1)
+              if [ -n "$EXISTING_REVIEW_ID" ]; a
+                echo "Dismissing previous 'Changes Requested' review (ID: $EXISTING_REVIEW_ID)."
+                gh pr review --dismiss "$EXISTING_REVIEW_ID" --body "Các vấn đề trước đó đã được giải quyết."
+              fi
+
+              gh pr review $PR_NUMBER --approve --body "Action: Phê duyệt. Số lượng issue trong ngưỡng cho phép."
+            else
+              # Nếu ĐÃ CÓ RỒI, chỉ in ra log và bỏ qua để không spam.
+              echo "PR was already approved by this action (Review ID: $EXISTING_APPROVAL_ID). Skipping."
             fi
-            gh pr review $PR_NUMBER --approve --body "Action: Phê duyệt. Số lượng issue trong ngưỡng cho phép."
+
             gh pr edit $PR_NUMBER --add-label "READY TO MERGE"
           fi
 
       - name: Report Final Status
         if: always()
         run: |
-          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
+          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
             STATE='failure'
             DESC="Đánh giá phát hiện thấy có ${{ steps.generate_summary.outputs.issue_count }} vấn đề chưa được giải quyết."
           else
