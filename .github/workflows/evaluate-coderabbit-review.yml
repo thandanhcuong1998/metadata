@@ -5,15 +5,19 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  # Kích hoạt khi CodeRabbit gửi review lần đầu
   pull_request_review:
     types: [submitted]
+  # Kích hoạt khi bạn giải quyết hoặc mở lại một issue
   pull_request_review_thread:
     types: [resolved, unresolved]
 
 jobs:
   evaluate_codereview:
     if: |
+      # Chạy nếu là review từ CodeRabbit
       (github.event_name == 'pull_request_review' && github.event.sender.login == 'coderabbitai[bot]') ||
+      # Hoặc chạy nếu là sự kiện giải quyết issue (và không phải do chính action gây ra)
       (github.event_name == 'pull_request_review_thread' && github.event.sender.login != 'github-actions[bot]')
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
