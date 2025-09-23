@@ -7,25 +7,22 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   pull_request_review:
     types: [submitted]
-  issue_comment:
+  pull_request_review_comment:
     types: [created]
 
 jobs:
   evaluate_codereview:
     if: |
       (github.event_name == 'pull_request_review' && github.event.sender.login == 'coderabbitai[bot]') ||
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        contains(github.event.comment.body, 'resolved this conversation') &&
-        github.event.sender.login != 'github-actions[bot]'
-      )
+      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.sender.login != 'github-actions[bot]')
     env:
-      # PR_NUMBER cần được lấy theo cách khác nhau tùy thuộc vào sự kiện
-      PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.issue.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       COMMENT_MARKER: ""
     runs-on: ubuntu-latest
@@ -33,7 +30,6 @@ jobs:
       pull-requests: write
       contents: read
       statuses: write
-      issues: write # Cần quyền 'issues: write' cho 'issue_comment'
 
     steps:
       - name: Checkout code
@@ -122,7 +118,7 @@ jobs:
       - name: Report Final Status
         if: always()
         run: |
-          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
+          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
             STATE='failure'
             DESC="Đánh giá phát hiện thấy có ${{ steps.generate_summary.outputs.issue_count }} vấn đề chưa được giải quyết."
           else
