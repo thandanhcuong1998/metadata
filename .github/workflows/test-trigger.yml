@@ -1,0 +1,14 @@
+name: Test PR Review Trigger
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  test_job:
+    # Sử dụng y hệt điều kiện if của workflow chính
+    if: github.event.sender.login == 'coderabbitai[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Acknowledge Trigger
+        run: echo "✅ Test workflow was successfully triggered by ${{ github.event.sender.login }}"
