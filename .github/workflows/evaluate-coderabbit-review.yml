@@ -1,3 +1,5 @@
+# Vị trí: .github/workflows/evaluate-coderabbit-review.yml
+
 name: Evaluate CodeRabbit Review
 
 concurrency:
@@ -5,23 +7,25 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  # Kích hoạt khi CodeRabbit gửi review lần đầu
   pull_request_review:
     types: [submitted]
-  # Kích hoạt khi bạn giải quyết hoặc mở lại một issue
-  pull_request_review_thread:
-    types: [resolved, unresolved]
+  issue_comment:
+    types: [created]
 
 jobs:
   evaluate_codereview:
     if: |
-      # Chạy nếu là review từ CodeRabbit
       (github.event_name == 'pull_request_review' && github.event.sender.login == 'coderabbitai[bot]') ||
-      # Hoặc chạy nếu là sự kiện giải quyết issue (và không phải do chính action gây ra)
-      (github.event_name == 'pull_request_review_thread' && github.event.sender.login != 'github-actions[bot]')
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, 'resolved this conversation') &&
+        github.event.sender.login != 'github-actions[bot]'
+      )
     env:
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      # PR_NUMBER cần được lấy theo cách khác nhau tùy thuộc vào sự kiện
+      PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.issue.pull_request.head.sha }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       COMMENT_MARKER: ""
     runs-on: ubuntu-latest
@@ -29,6 +33,7 @@ jobs:
       pull-requests: write
       contents: read
       statuses: write
+      issues: write # Cần quyền 'issues: write' cho 'issue_comment'
 
     steps:
       - name: Checkout code
@@ -37,7 +42,6 @@ jobs:
       - name: Generate Summary from Unresolved Comments
         id: generate_summary
         run: |
-          # ... (toàn bộ nội dung script không đổi) ...
           graphql_query='
             query($owner: String!, $name: String!, $prNumber: Int!) {
               repository(owner: $owner, name: $name) {
@@ -56,8 +60,7 @@ jobs:
                   }
                 }
               }
-            }
-          }'
+            }'
           issues_json=$(gh api graphql -f query="$graphql_query" -f owner="${{ github.repository_owner }}" -f name="${{ github.event.repository.name }}" -F prNumber="$PR_NUMBER" \
             --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai[bot]" and (.body | contains("_⚠️ Potential issue_")))]')
           issue_count=$(echo "$issues_json" | jq 'length')
@@ -101,7 +104,6 @@ jobs:
 
       - name: Approve or Request Changes based on Issue Count
         run: |
-          # ... (toàn bộ nội dung script không đổi) ...
           if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
             echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }} (>3)."
             gh pr review $PR_NUMBER --request-changes --body "Action: Yêu cầu thay đổi. Chi tiết xem trong comment tóm tắt."
@@ -120,7 +122,6 @@ jobs:
       - name: Report Final Status
         if: always()
         run: |
-          # ... (toàn bộ nội dung script không đổi) ...
           if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
             STATE='failure'
             DESC="Đánh giá phát hiện thấy có ${{ steps.generate_summary.outputs.issue_count }} vấn đề chưa được giải quyết."
