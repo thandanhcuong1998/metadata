@@ -1,0 +1,18 @@
+name: Debug PR Review Event
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump event context
+        run: |
+          echo "Event triggered by:"
+          echo "Sender Login: ${{ github.event.sender.login }}"
+          echo "Sender Type: ${{ github.event.sender.type }}"
+          echo "---"
+          echo "Full event payload:"
+          echo "${{ toJSON(github.event) }}"
