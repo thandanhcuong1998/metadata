@@ -1,2 +1,2 @@
 1
-<script 123>
+<script 123>1
