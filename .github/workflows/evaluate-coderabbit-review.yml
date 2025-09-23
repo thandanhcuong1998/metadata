@@ -1,6 +1,12 @@
 # Vị trí: .github/workflows/evaluate-coderabbit-review.yml
 name: Evaluate CodeRabbit Review
 
+# FIX #1: Thêm concurrency để đảm bảo chỉ có một lần chạy workflow tại một thời điểm cho mỗi PR.
+# Nếu có một trigger mới, nó sẽ hủy lần chạy trước đó. Điều này sẽ giải quyết dứt điểm vấn đề lặp comment.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request_review:
     types: [submitted]
@@ -55,7 +61,7 @@ jobs:
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
           SUMMARY_BODY="### 🔍 Phân tích từ CodeRabbit\n\n"
           if [ "$issue_count" -gt 0 ]; then
-            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue' chưa được giải quyết.</font>** Cần phải xử lý trước khi merge.\n\n"
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue' chưa được giải quyết.</font>**\n\n"
             SUMMARY_BODY="${SUMMARY_BODY}| Vấn đề được phát hiện | Xem chi tiết |\n"
             SUMMARY_BODY="${SUMMARY_BODY}| --- | --- |\n"
             table_rows=$(echo "$issues_json" | jq -r '.[] | "| `\(.body | split("\n")[0])` | [Link tới comment](\(.url)) |"')
@@ -63,12 +69,15 @@ jobs:
           else
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Tất cả 'Potential issue' đã được giải quyết.\n"
           fi
+          
+          # FIX #2: Sửa lại logic trạng thái trong comment theo đúng yêu cầu ban đầu (>3)
           SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n"
-          if [ "$issue_count" -gt 0 ]; then
-             SUMMARY_BODY="${SUMMARY_BODY}**<font color='orange'>⚠️ Trạng thái: Yêu cầu thay đổi.</font>** Vui lòng giải quyết các vấn đề trên."
+          if [ "$issue_count" -gt 3 ]; then
+             SUMMARY_BODY="${SUMMARY_BODY}**<font color='orange'>⚠️ Trạng thái: Yêu cầu thay đổi.</font>** Số lượng 'Potential issue' (${issue_count}) vượt quá ngưỡng cho phép (3)."
           else
-             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>✅ Trạng thái: Phê duyệt.</font>** Không có 'Potential issue' nào. Sẵn sàng để merge!"
+             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>✅ Trạng thái: Phê duyệt.</font>** Số lượng 'Potential issue' (${issue_count}) nằm trong ngưỡng cho phép."
           fi
+          
           SUMMARY_BODY="${SUMMARY_BODY}\n\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
           echo "summary_body<<EOF" >> $GITHUB_OUTPUT
           echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
@@ -83,28 +92,31 @@ jobs:
 
       - name: Approve or Request Changes based on Issue Count
         run: |
-          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
-            echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }}."
+          # FIX #2: Sửa lại logic phê duyệt/yêu cầu thay đổi theo đúng yêu cầu ban đầu (>3)
+          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
+            echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }} (>3)."
             gh pr review $PR_NUMBER --request-changes --body "Action: Yêu cầu thay đổi. Chi tiết xem trong comment tóm tắt."
             gh pr edit $PR_NUMBER --remove-label "READY TO MERGE" || true
           else
-            echo "Approving because issue count is 0."
+            echo "Approving because issue count is ${{ steps.generate_summary.outputs.issue_count }} (<=3)."
             EXISTING_REVIEW_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED") | .id' | tail -n 1)
             if [ -n "$EXISTING_REVIEW_ID" ]; then
               echo "Dismissing previous 'Changes Requested' review (ID: $EXISTING_REVIEW_ID)."
               gh pr review --dismiss "$EXISTING_REVIEW_ID" --body "Các vấn đề trước đó đã được giải quyết."
             fi
-            gh pr review $PR_NUMBER --approve --body "Action: Phê duyệt. Sẵn sàng để merge!"
+            gh pr review $PR_NUMBER --approve --body "Action: Phê duyệt. Số lượng issue trong ngưỡng cho phép."
             gh pr edit $PR_NUMBER --add-label "READY TO MERGE"
           fi
 
       - name: Report Final Status
         if: always()
         run: |
-          # --- THAY ĐỔI THEO GỢI Ý CỦA CODERABBIT ---
+          # FIX #3: Logic này được giữ nguyên theo gợi ý của CodeRabbit.
+          # Nó sẽ báo 'failure' nếu CÓ BẤT KỲ issue nào, dù PR đã được approve.
+          # Điều này giúp cảnh báo trực quan rằng vẫn còn việc cần làm.
           if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
             STATE='failure'
-            DESC="Đánh giá phát hiện thấy có ${issue_count} vấn đề chưa được giải quyết."
+            DESC="Đánh giá phát hiện thấy có ${{ steps.generate_summary.outputs.issue_count }} vấn đề chưa được giải quyết."
           else
             STATE='success'
             DESC='Đánh giá hoàn tất: không có vấn đề nào.'
