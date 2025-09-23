@@ -4,8 +4,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# CẢI TIẾN #1: Sửa lại trigger theo gợi ý của CodeRabbit.
-# Sử dụng 'pull_request_review_thread' để bắt đúng sự kiện 'resolved' và 'unresolved'.
 on:
   pull_request_review:
     types: [submitted]
@@ -14,7 +12,6 @@ on:
 
 jobs:
   evaluate_codereview:
-    # Sửa lại điều kiện 'if' để bao gồm cả event mới 'pull_request_review_thread'
     if: |
       (github.event_name == 'pull_request_review' && github.event.sender.login == 'coderabbitai[bot]') ||
       (github.event_name == 'pull_request_review_thread' && github.event.sender.login != 'github-actions[bot]')
@@ -22,7 +19,6 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # CẢI TIẾN #2: Định nghĩa một marker ẩn ổn định để tìm kiếm.
       COMMENT_MARKER: ""
     runs-on: ubuntu-latest
     permissions:
@@ -37,6 +33,7 @@ jobs:
       - name: Generate Summary from Unresolved Comments
         id: generate_summary
         run: |
+          # ... (toàn bộ nội dung script không đổi) ...
           graphql_query='
             query($owner: String!, $name: String!, $prNumber: Int!) {
               repository(owner: $owner, name: $name) {
@@ -55,19 +52,14 @@ jobs:
                   }
                 }
               }
-            }'
-            
-          # CẢI TIẾN #3: Sửa lại bộ lọc tác giả GraphQL cho chính xác thành 'coderabbitai[bot]'.
+            }
+          }'
           issues_json=$(gh api graphql -f query="$graphql_query" -f owner="${{ github.repository_owner }}" -f name="${{ github.event.repository.name }}" -F prNumber="$PR_NUMBER" \
             --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai[bot]" and (.body | contains("_⚠️ Potential issue_")))]')
-            
           issue_count=$(echo "$issues_json" | jq 'length')
           echo "Final issue count is: $issue_count"
           echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
-          
-          # Luôn thêm marker ẩn vào đầu nội dung comment.
           SUMMARY_BODY="${{ env.COMMENT_MARKER }}\n\n### 🔍 Phân tích từ CodeRabbit\n\n"
-          
           if [ "$issue_count" -gt 0 ]; then
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue' chưa được giải quyết.</font>**\n\n"
             SUMMARY_BODY="${SUMMARY_BODY}| Vấn đề được phát hiện | Xem chi tiết |\n"
@@ -77,20 +69,17 @@ jobs:
           else
             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Tất cả 'Potential issue' đã được giải quyết.\n"
           fi
-          
           SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n"
           if [ "$issue_count" -gt 3 ]; then
              SUMMARY_BODY="${SUMMARY_BODY}**<font color='orange'>⚠️ Trạng thái: Yêu cầu thay đổi.</font>** Số lượng 'Potential issue' (${issue_count}) vượt quá ngưỡng cho phép (3)."
           else
              SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>✅ Trạng thái: Phê duyệt.</font>** Số lượng 'Potential issue' (${issue_count}) nằm trong ngưỡng cho phép."
           fi
-          
           SUMMARY_BODY="${SUMMARY_BODY}\n\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
           echo "summary_body<<EOF" >> $GITHUB_OUTPUT
           echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      # CẢI TIẾN #4: Thêm bước tìm kiếm comment hiện có.
       - name: Find existing summary comment
         id: find_comment
         uses: peter-evans/find-comment@v3
@@ -98,19 +87,17 @@ jobs:
           issue-number: ${{ env.PR_NUMBER }}
           body-includes: ${{ env.COMMENT_MARKER }}
 
-      # CẢI TIẾN #5: Sử dụng numeric comment-id từ bước trên để cập nhật.
       - name: Create or Update Summary Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ env.PR_NUMBER }}
-          # Lấy comment-id (dạng số) từ output của bước 'find_comment'.
-          # Nếu không tìm thấy, giá trị này sẽ rỗng và action sẽ tự động tạo comment mới.
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
           body: ${{ steps.generate_summary.outputs.summary_body }}
           edit-mode: replace
 
       - name: Approve or Request Changes based on Issue Count
         run: |
+          # ... (toàn bộ nội dung script không đổi) ...
           if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
             echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }} (>3)."
             gh pr review $PR_NUMBER --request-changes --body "Action: Yêu cầu thay đổi. Chi tiết xem trong comment tóm tắt."
@@ -129,6 +116,7 @@ jobs:
       - name: Report Final Status
         if: always()
         run: |
+          # ... (toàn bộ nội dung script không đổi) ...
           if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
             STATE='failure'
             DESC="Đánh giá phát hiện thấy có ${{ steps.generate_summary.outputs.issue_count }} vấn đề chưa được giải quyết."
@@ -136,7 +124,6 @@ jobs:
             STATE='success'
             DESC='Đánh giá hoàn tất: không có vấn đề nào.'
           fi
-
           gh api \
             --method POST \
             /repos/${{ github.repository }}/statuses/$HEAD_SHA \
