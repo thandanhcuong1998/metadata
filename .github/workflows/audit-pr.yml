@@ -1,0 +1,81 @@
+# Location: .github/workflows/audit-pr.yml
+
+name: 'Audit PR for Unresolved Comments'
+
+on:
+  pull_request:
+    types: [closed]
+  issue_comment:
+    types: [created]
+
+jobs:
+  audit:
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/auditor review'))
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # Changed to write to allow commenting
+
+    steps:
+      - name: Run Audit and Generate Summary
+        id: run_audit
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_MARKER: ""
+        run: |
+          graphql_query='
+            query($owner: String!, $name: String!, $prNumber: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $prNumber) {
+                  reviewThreads(first: 100) {
+                    nodes {
+                      isResolved
+                      comments(first: 1) {
+                        nodes {
+                          author { login }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }'
+
+          unresolved_count=$(gh api graphql -f query="$graphql_query" -f owner="${{ github.repository_owner }}" -f name="${{ github.event.repository.name }}" -F prNumber="$PR_NUMBER" \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and .comments.nodes[0].author.login == "coderabbitai[bot]")] | length')
+
+          echo "unresolved_count=$unresolved_count" >> $GITHUB_OUTPUT
+
+          # --- Build Summary Comment Body ---
+          SUMMARY_BODY="${{ env.COMMENT_MARKER }}\n\n### 🛡️ Final Audit Report\n\n"
+          if [ "$unresolved_count" -gt 0 ]; then
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'>❌ Audit Failed.</font>** Found **$unresolved_count** unresolved CodeRabbit comment(s) at the time of merge/audit."
+          else
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>✅ Audit Passed.</font>** All CodeRabbit comments were resolved."
+          fi
+
+          echo "summary_body<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create or Update Audit Comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number || github.event.issue.number }}
+          body: ${{ steps.run_audit.outputs.summary_body }}
+          edit-mode: replace
+
+      - name: Set Workflow Status
+        if: always()
+        run: |
+          unresolved_count=${{ steps.run_audit.outputs.unresolved_count }}
+          if [ "$unresolved_count" -gt 0 ]; then
+            echo "::error::Audit Failed! Found $unresolved_count unresolved CodeRabbit comment(s)."
+            exit 1
+          else
+            echo "Audit Passed."
+          fi

@@ -1,6 +1,6 @@
-# Vị trí: .github/workflows/evaluate-coderabbit-review.yml
+# Location: .github/workflows/evaluate-coderabbit-review.yml
 
-name: Evaluate CodeRabbit Review
+name: 'Evaluate CodeRabbit Review'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,7 +12,7 @@ on:
   pull_request_review:
     types: [submitted]
   pull_request_review_comment:
-    types: [created]
+    types: [created, deleted]
 
 jobs:
   evaluate_codereview:
@@ -21,7 +21,7 @@ jobs:
       (github.event_name == 'pull_request' && github.event.action != 'closed') ||
       (github.event_name == 'pull_request_review_comment' && github.event.sender.login != 'github-actions[bot]')
     env:
-      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       COMMENT_MARKER: ""
@@ -35,8 +35,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate Summary from Unresolved Comments
-        id: generate_summary
+      - name: Evaluate Unresolved Comments and Generate Summary
+        id: evaluate
         run: |
           graphql_query='
             query($owner: String!, $name: String!, $prNumber: Int!) {
@@ -57,94 +57,105 @@ jobs:
                 }
               }
             }'
-          issues_json=$(gh api graphql -f query="$graphql_query" -f owner="${{ github.repository_owner }}" -f name="${{ github.event.repository.name }}" -F prNumber="$PR_NUMBER" \
-            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai[bot]" and (.body | contains("_⚠️ Potential issue_")))]')
-          issue_count=$(echo "$issues_json" | jq 'length')
-          echo "Final issue count is: $issue_count"
-          echo "issue_count=$issue_count" >> $GITHUB_OUTPUT
-          SUMMARY_BODY="${{ env.COMMENT_MARKER }}\n\n### 🔍 Phân tích từ CodeRabbit\n\n"
-          if [ "$issue_count" -gt 0 ]; then
-            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'> tìm thấy $issue_count 'Potential issue' chưa được giải quyết.</font>**\n\n"
-            SUMMARY_BODY="${SUMMARY_BODY}| Vấn đề được phát hiện | Xem chi tiết |\n"
-            SUMMARY_BODY="${SUMMARY_BODY}| --- | --- |\n"
-            table_rows=$(echo "$issues_json" | jq -r '.[] | "| `\(.body | split("\n")[0])` | [Link tới comment](\(.url)) |"')
+
+          # Get all unresolved comments from coderabbitai[bot]
+          unresolved_comments_json=$(gh api graphql -f query="$graphql_query" -f owner="${{ github.repository_owner }}" -f name="${{ github.event.repository.name }}" -F prNumber="$PR_NUMBER" \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | select(.author.login == "coderabbitai[bot]")]')
+
+          # Count specific types of unresolved comments
+          potential_issue_count=$(echo "$unresolved_comments_json" | jq '[.[] | select(.body | contains("_⚠️ Potential issue_"))] | length')
+          refactor_suggestion_count=$(echo "$unresolved_comments_json" | jq '[.[] | select(.body | contains("_Refactor suggestion_"))] | length')
+          total_unresolved_count=$(echo "$unresolved_comments_json" | jq 'length')
+          total_suggestions=$((potential_issue_count + refactor_suggestion_count))
+
+          echo "Unresolved Potential Issues: $potential_issue_count"
+          echo "Unresolved Refactor Suggestions: $refactor_suggestion_count"
+          echo "Total Unresolved CodeRabbit Comments: $total_unresolved_count"
+
+          echo "potential_issue_count=$potential_issue_count" >> $GITHUB_OUTPUT
+          echo "total_suggestions=$total_suggestions" >> $GITHUB_OUTPUT
+          echo "total_unresolved_count=$total_unresolved_count" >> $GITHUB_OUTPUT
+
+          # --- Build Summary Comment Body ---
+          SUMMARY_BODY="${{ env.COMMENT_MARKER }}\n\n### 🔍 CodeRabbit Analysis\n\n"
+          if [ "$total_unresolved_count" -gt 0 ]; then
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'>Found $total_unresolved_count unresolved comment(s).</font>**\n\n"
+            SUMMARY_BODY="${SUMMARY_BODY}| Type | Details | Link |\n"
+            SUMMARY_BODY="${SUMMARY_BODY}|:---|:---|:---|\n"
+            table_rows=$(echo "$unresolved_comments_json" | jq -r '.[] | "| `\(if (.body | contains("_⚠️ Potential issue_")) then "Issue" else "Refactor" end)` | `\(.body | split("\n")[0])` | [View](\(.url)) |"')
             SUMMARY_BODY="${SUMMARY_BODY}${table_rows}"
           else
-            SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'> Tuyệt vời!</font>** Tất cả 'Potential issue' đã được giải quyết.\n"
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>Excellent!</font>** All CodeRabbit comments have been resolved.\n"
           fi
+
+          # --- Determine Approval Status ---
           SUMMARY_BODY="${SUMMARY_BODY}\n\n---\n"
-          if [ "$issue_count" -gt 3 ]; then
-             SUMMARY_BODY="${SUMMARY_BODY}**<font color='orange'>⚠️ Trạng thái: Yêu cầu thay đổi.</font>** Số lượng 'Potential issue' (${issue_count}) vượt quá ngưỡng cho phép (3)."
+          if [ "$total_unresolved_count" -gt 0 ] || [ "$potential_issue_count" -gt 1 ] || [ "$total_suggestions" -gt 4 ]; then
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='red'>❌ Status: Changes Requested.</font>**\n"
+            SUMMARY_BODY="${SUMMARY_BODY}- Total unresolved comments: **$total_unresolved_count** (Required: 0)\n"
+            SUMMARY_BODY="${SUMMARY_BODY}- Unresolved 'Potential Issues': **$potential_issue_count** (Required: ≤ 1)\n"
+            SUMMARY_BODY="${SUMMARY_BODY}- Total 'Issues' + 'Refactors': **$total_suggestions** (Required: ≤ 4)"
           else
-             SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>✅ Trạng thái: Phê duyệt.</font>** Số lượng 'Potential issue' (${issue_count}) nằm trong ngưỡng cho phép."
+            SUMMARY_BODY="${SUMMARY_BODY}**<font color='green'>✅ Status: Approved.</font>** All quality gates passed."
           fi
-          SUMMARY_BODY="${SUMMARY_BODY}\n\n*Bảng này được cập nhật tự động bởi GitHub Actions.*"
+
           echo "summary_body<<EOF" >> $GITHUB_OUTPUT
           echo -e "$SUMMARY_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Find existing summary comment
-        id: find_comment
-        uses: peter-evans/find-comment@v3
-        with:
-          issue-number: ${{ env.PR_NUMBER }}
-          body-includes: ${{ env.COMMENT_MARKER }}
 
       - name: Create or Update Summary Comment
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ env.PR_NUMBER }}
-          comment-id: ${{ steps.find_comment.outputs.comment-id }}
-          body: ${{ steps.generate_summary.outputs.summary_body }}
+          body: ${{ steps.evaluate.outputs.summary_body }}
           edit-mode: replace
 
-      - name: Approve or Request Changes based on Issue Count
+      - name: Approve or Request Changes based on Evaluation
         run: |
-          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 3 ]; then
-            echo "Requesting changes because issue count is ${{ steps.generate_summary.outputs.issue_count }} (>3)."
-            gh pr review $PR_NUMBER --request-changes --body "Action: Yêu cầu thay đổi. Chi tiết xem trong comment tóm tắt."
+          total_unresolved=${{ steps.evaluate.outputs.total_unresolved_count }}
+          potential_issues=${{ steps.evaluate.outputs.potential_issue_count }}
+          total_suggestions=${{ steps.evaluate.outputs.total_suggestions }}
+
+          if [ "$total_unresolved" -gt 0 ] || [ "$potential_issues" -gt 1 ] || [ "$total_suggestions" -gt 4 ]; then
+            echo "Requesting changes because quality gates were not met."
+            gh pr review $PR_NUMBER --request-changes --body "Action: Changes requested. See summary comment for details."
             gh pr edit $PR_NUMBER --remove-label "READY TO MERGE" || true
           else
-            echo "Issue count is ${{ steps.generate_summary.outputs.issue_count }} (<=3). Checking for existing approval."
+            echo "All quality gates passed. Checking for existing approval."
 
-            EXISTING_APPROVAL_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "APPROVED") | .id' | tail -n 1)
-
-            if [ -z "$EXISTING_APPROVAL_ID" ]; then
-              echo "No existing approval found. Submitting a new approval."
-
-              # --- SỬA LỖI BẮT ĐẦU TỪ ĐÂY ---
-              EXISTING_REVIEW_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED") | .id' | tail -n 1)
-              if [ -n "$EXISTING_REVIEW_ID" ]; then # Sửa 'a' thành 'then'
-                echo "Dismissing previous 'Changes Requested' review (ID: $EXISTING_REVIEW_ID)."
-                # Sửa lại lệnh dismiss cho đúng cú pháp API
-                gh api \
-                  --method PUT \
-                  /repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews/$EXISTING_REVIEW_ID/dismissals \
-                  -f message="Các vấn đề trước đó đã được giải quyết."
-              fi
-              # --- KẾT THÚC SỬA LỖI ---
-
-              gh pr review $PR_NUMBER --approve --body "Action: Phê duyệt. Số lượng issue trong ngưỡng cho phép."
-            else
-              echo "PR was already approved by this action (Review ID: $EXISTING_APPROVAL_ID). Skipping."
+            # Dismiss previous "CHANGES_REQUESTED" review if it exists, before approving.
+            EXISTING_REVIEW_ID=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews[] | select(.author.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED") | .id' | tail -n 1)
+            if [ -n "$EXISTING_REVIEW_ID" ]; then
+              echo "Dismissing previous 'Changes Requested' review (ID: $EXISTING_REVIEW_ID)."
+              gh api \
+                --method PUT \
+                /repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews/$EXISTING_REVIEW_ID/dismissals \
+                -f message="Previous issues have been addressed."
             fi
 
+            echo "Submitting approval."
+            gh pr review $PR_NUMBER --approve --body "Action: Approved. All code review conditions are met."
             gh pr edit $PR_NUMBER --add-label "READY TO MERGE"
           fi
 
-      - name: Report Final Status
+      - name: Report Final Status Check
         if: always()
         run: |
-          if [ "${{ steps.generate_summary.outputs.issue_count }}" -gt 0 ]; then
+          total_unresolved=${{ steps.evaluate.outputs.total_unresolved_count }}
+          potential_issues=${{ steps.evaluate.outputs.potential_issue_count }}
+          total_suggestions=${{ steps.evaluate.outputs.total_suggestions }}
+
+          if [ "$total_unresolved" -gt 0 ] || [ "$potential_issues" -gt 1 ] || [ "$total_suggestions" -gt 4 ]; then
             STATE='failure'
-            DESC="Đánh giá phát hiện thấy có ${{ steps.generate_summary.outputs.issue_count }} vấn đề chưa được giải quyết."
+            DESC="Failed: $total_unresolved unresolved comment(s) exist or thresholds exceeded."
           else
             STATE='success'
-            DESC='Đánh giá hoàn tất: không có vấn đề nào.'
+            DESC='Success: All code review quality gates passed.'
           fi
+
           gh api \
             --method POST \
             /repos/${{ github.repository }}/statuses/$HEAD_SHA \
             -f state="$STATE" \
             -f description="$DESC" \
-            -f context='Code Analysis Result'
+            -f context='Code Review Quality Gate'
